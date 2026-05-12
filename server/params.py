@@ -1,0 +1,13 @@
+TICK_RATE: int = 20               # ticks per second
+MANA_REFILL_RATE: float = 1.0    # mana per second
+MAXIMUM_MANA: float = 10.0
+BASE_MOVE_COST: float = 1.0
+DISTANCE_COST: float = 0.2       # mana per board unit
+MOVEMENT_FREEDOM_DEG: float = 5.0
+DIAMETER_PIECE: float = 0.6      # in square units
+SQUARE_SIDE: float = 1.0
+PREPARATION_PERIOD: float = 0.5  # seconds
+MOVEMENT_SPEED: float = 4.0      # board units per second
+COOLDOWN: float = 0.8            # seconds
+SERVER_HOST: str = "0.0.0.0"
+SERVER_PORT: int = 8765
