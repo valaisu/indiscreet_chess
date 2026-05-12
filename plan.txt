@@ -1,0 +1,48 @@
+In normal chess, everything is very discreet. In RTS chess, things are not. The board, the pieces, they look the same, but functionally, there are not turns or squares. There are many ways to make this game work, and I don't know what is the best, so I want to leave many things open as parameters, marked *like_this*. With this intro, let's move to explain the rules as I them imagine.
+
+
+Both players have a manapool that refills at a constant rate *mana_refill_rate*, and caps *maximum_mana*
+
+Mana can be used to queue moves. Moves cost *base_move_cost* + *distance_cost* · move_distance.
+
+Each piece is circular, with diameter of *diameter_piece*. The board consists of 8·8 squares with side length of *square_side_length*.
+
+The pieces move in rough directions. We have three kind of pieces:
+	Infinite movement length: These pieces can move as far into the directions that they would normally move to. However, the don't have to move in exactly straight line, and the distance is not limited to discrete numbers. Rather, there is *movement_freedom_degrees* degrees of margin in where the pieces can move. This means, that longer moves can deviate farther from the rigid diagonals. Pieces included: Rook, Bishop, Queen
+	Capped movement pieces: These pieces work the same as normal pieces, except that the can move at maximum the distance of one square horizontally/vertically, or the distance of sqrt(2) squares diagonally. Pieces included: King, Pawn
+	Knight: The knight can move in (up to) 8 directions. The movement area is a circle around the these points, it's radius is defined by how far a piece could deviate from a line at move distance of sqrt(5) 
+	
+Each player can submit their moves at any time. I was planning, that the game could for example run with 20 ticks.
+
+When a move is submitted, both the starting and ending square will be correspondingly marked, for example with a matching color. The mana cost will be paid immediately, irrespective of what happens next. Then, a preparation period of *preparation_period* seconds will start. After this, the piece will start to move with speed of *movement speed* to it's assigned direction. This speed can be such that movement is basically instantaneous. Once a piece stops moving, it starts a cooldown period of *cooldown* seconds. During this period, the piece cannot move, and no new moves can be queued for said piece.
+
+How does eating pieces work? Each piece can eat one enemy piece and zero own pieces each turn (these numbers can also be controllable variables). An enemy piece is eaten when the hitbox of your piece first touches the enemy piece. However, if the enemy piece is also still moving, both pieces eat each other, and disappear. But if a moving piece eats enemy and does not get eaten, then it can continue moving, but only until its centerpoint has moved as far in it's movement direction, as where the centerpoint of the eaten piece is. Other things that can stop the piece movement too. If the piece was queued to stop before this alignment, that can stop the piece. Also, if the piece is about to hit another piece (which it won't then be able to eat, irrespective of the color) then the piece movement should stop.
+
+When can a move be queued? In general the piece needs to not be on a cooldown, and the player has to have mana to perform the move. However, there are some special cases that need to be further defined. 
+When can a pawn move diagonally? A pawn can move diagonally, if by doing so it would eat a piece. With some rulesets, the target piece might be able to dodge the pawn, in such case the pawn will move like nothing happened. 
+Pawn double move: A pawn has the forward move length of two, if it's centerpoint has not left it's starting square. Pawn can never eat pieces when moving forward. It can only block pieces, and get eaten.
+En passant: If a pawn executes a double move, it will leave a "ghost" in the position, where the centerpoint of the pawn crosses the centerpoint of the 3rd/6th rank. This ghost can be eaten by an enemy solder, in which case the original pawn is also eaten. The ghost dissappears, once the enemy queues a move the first time after the pawn moving two places has finished its movement, and this move queued is not one that is going to eat the pawn. This means, that the pawn that took a double move can move further, and still get eaten. 
+Castling: Castling is allowed, when the king or the rook has not moved. It is executed by moving the king to the side more than 1 but less or equal to 2 squares (along a line, as usual). The rook will also start to move, arriving to the position exactly one square left/right of the king. So for a moment, the king and the rook will overlap. If the movement of the pieces is blocked somehow during the overlap period, then the blocked pieces will stop moving, and potentially remain overlapped. 
+In general: The game is won by eating the enemy king. There are no checks, nothing forbids the king from moving to a square where it could potentially be eaten. Kings can even eat each other, or get eaten simultaneously (which results in a draw). 
+
+
+
+
+
+
+
+
+
+
+
+
+en passant
+horse special mechanics
+castling 
+solder eating
+promotion
+
+
+
+
+
