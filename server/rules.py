@@ -9,7 +9,6 @@ from . import params
 from .pieces import Piece, PieceType, PieceState
 
 _SQRT2 = math.sqrt(2.0)
-_FREEDOM_RAD = math.radians(params.MOVEMENT_FREEDOM_DEG)
 
 _ORTHO: list[tuple[float, float]] = [
     (1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0),
@@ -56,10 +55,11 @@ def validate_move(piece: Piece, dest_x: float, dest_y: float,
 
 def _in_sector(dx: float, dy: float, dirs: list[tuple[float, float]]) -> bool:
     """True if (dx, dy) is within MOVEMENT_FREEDOM_DEG of any direction in dirs."""
+    freedom = math.radians(params.MOVEMENT_FREEDOM_DEG)
     length = math.hypot(dx, dy)
     for lx, ly in dirs:
         dot = (dx * lx + dy * ly) / length
-        if math.acos(max(-1.0, min(1.0, dot))) <= _FREEDOM_RAD:
+        if math.acos(max(-1.0, min(1.0, dot))) <= freedom:
             return True
     return False
 
@@ -139,21 +139,20 @@ def _check_pawn(piece: Piece, dest_x: float, dest_y: float,
     if _in_sector(dx, dy, diag_dirs):
         if dist > params.SQUARE_SIDE * _SQRT2:
             return "pawn diagonal move too far"
-        if not _enemy_in_path(piece, dest_x, dest_y, all_pieces):
+        if not _enemy_at_dest(dest_x, dest_y, piece.owner, all_pieces):
             return "pawn can only move diagonally to capture"
         return None
 
     return "pawn can only move forward or diagonally forward to capture"
 
 
-def _enemy_in_path(piece: Piece, dest_x: float, dest_y: float,
+def _enemy_at_dest(dest_x: float, dest_y: float, owner: str,
                    all_pieces: list[Piece]) -> bool:
-    """True if any enemy piece's centre lies within DIAMETER_PIECE of the move path."""
-    R = params.DIAMETER_PIECE
+    """True if any enemy piece's hitbox overlaps the destination point."""
     for other in all_pieces:
-        if other.owner == piece.owner:
+        if other.owner == owner:
             continue
-        if seg_dist(other.x, other.y, piece.x, piece.y, dest_x, dest_y) <= R:
+        if math.hypot(other.x - dest_x, other.y - dest_y) < params.DIAMETER_PIECE:
             return True
     return False
 
@@ -172,7 +171,7 @@ def seg_dist(px: float, py: float,
 
 def _check_knight(dx: float, dy: float) -> str | None:
     s = params.SQUARE_SIDE
-    r = math.sqrt(5.0) * s * math.tan(_FREEDOM_RAD)
+    r = math.sqrt(5.0) * s * math.tan(math.radians(params.MOVEMENT_FREEDOM_DEG))
     targets = (
         [(a * s, b * s) for a in (2.0, -2.0) for b in (1.0, -1.0)] +
         [(a * s, b * s) for a in (1.0, -1.0) for b in (2.0, -2.0)]

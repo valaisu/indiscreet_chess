@@ -2,22 +2,23 @@
 Indiscreet Chess — client entry point.
 
 Run from project root:
-    python -m client.main [--host HOST] [--port PORT] [--color white|black] [--solo]
+    python -m client.main
 
---solo    Control both colours (server must also run with --solo).
+The start menu handles mode selection (Solo / Host / Join) and parameters.
 """
 
-import argparse
 import asyncio
 import json
 import math
 import queue
+import subprocess
 import sys
 import threading
 import time
 
 import pygame
 
+from client.menu import run_menu
 from client.renderer import (
     Renderer, board_to_px, px_to_board,
     PIECE_R, SQ, WIN_W, WIN_H,
@@ -69,6 +70,30 @@ async def _network_loop(url: str, color: str,
 
 
 # ---------------------------------------------------------------------------
+# Server spawning
+# ---------------------------------------------------------------------------
+
+def _spawn_server(config: dict) -> subprocess.Popen:
+    p = config["params"]
+    args = [
+        sys.executable, "-m", "server.main",
+        "--port",        str(config["port"]),
+        "--mana-refill", str(p["mana_refill_rate"]),
+        "--max-mana",    str(p["maximum_mana"]),
+        "--base-cost",   str(p["base_move_cost"]),
+        "--dist-cost",   str(p["distance_cost"]),
+        "--prep",        str(p["preparation_period"]),
+        "--speed",       str(p["movement_speed"]),
+        "--cooldown",    str(p["cooldown"]),
+        "--freedom",     str(p["movement_freedom_deg"]),
+        "--diameter",    str(p["diameter_piece"]),
+    ]
+    if config["mode"] == "solo":
+        args.append("--solo")
+    return subprocess.Popen(args)
+
+
+# ---------------------------------------------------------------------------
 # Input helpers
 # ---------------------------------------------------------------------------
 
@@ -102,24 +127,20 @@ def _handle_click(mouse_pos: tuple[int, int],
     clicked = _find_piece_at(bx, by, pieces)
 
     if selected_id is None:
-        # Nothing selected: try to select a piece.
         if clicked:
             mine = solo or clicked["owner"] == player_color
             if mine and clicked["state"] == "idle":
                 return clicked["id"]
 
     else:
-        # Something is already selected.
         if clicked and clicked["id"] == selected_id:
-            return None  # click same piece → deselect
+            return None  # deselect
 
-        # Click another own idle piece → switch selection.
-        if clicked and clicked["state"] == "idle":
-            mine = solo or clicked["owner"] == player_color
-            if mine:
+        sel = next((p for p in pieces if p["id"] == selected_id), None)
+        if clicked and clicked["state"] == "idle" and sel:
+            if clicked["owner"] == sel["owner"]:
                 return clicked["id"]
 
-        # Otherwise: send move command to server.
         send_q.put({
             "type": QUEUE_MOVE,
             "piece_id": selected_id,
@@ -131,37 +152,28 @@ def _handle_click(mouse_pos: tuple[int, int],
 
 
 # ---------------------------------------------------------------------------
-# Main game loop
+# Game loop
 # ---------------------------------------------------------------------------
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Indiscreet Chess client")
-    parser.add_argument("--host",  default="localhost")
-    parser.add_argument("--port",  type=int, default=8765)
-    parser.add_argument("--color", default="white", choices=["white", "black"])
-    parser.add_argument("--solo",  action="store_true",
-                        help="Control both colours (server must run --solo too)")
-    args = parser.parse_args()
+def _game_loop(screen: pygame.Surface, config: dict) -> None:
+    solo         = config["mode"] == "solo"
+    player_color = "white" if config["mode"] != "join" else "black"
+    url          = f"ws://{config['host_ip']}:{config['port']}"
 
     recv_q: queue.Queue = queue.Queue()
     send_q: queue.Queue = queue.Queue()
 
     net_thread = threading.Thread(
         target=_run_network,
-        args=(f"ws://{args.host}:{args.port}", args.color, recv_q, send_q),
+        args=(url, player_color, recv_q, send_q),
         daemon=True,
     )
     net_thread.start()
 
-    pygame.init()
-    screen = pygame.display.set_mode((WIN_W, WIN_H))
     pygame.display.set_caption("Indiscreet Chess")
     clock = pygame.time.Clock()
 
-    player_color = args.color
-    solo = args.solo
-
-    renderer   = Renderer(player_color=None if solo else player_color)
+    renderer        = Renderer(player_color=None if solo else player_color)
     last_state: dict | None = None
     last_state_time: float  = 0.0
     selected_id: str | None = None
@@ -169,7 +181,6 @@ def main() -> None:
     while True:
         clock.tick(60)
 
-        # --- Events ---
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
@@ -189,14 +200,13 @@ def main() -> None:
                         send_q, player_color, solo,
                     )
                 if event.button == 3:
-                    selected_id = None  # right-click deselects
+                    selected_id = None
 
-        # --- Drain network queue, keep latest state ---
         try:
             while True:
                 msg = recv_q.get_nowait()
                 if "_error" in msg:
-                    pass  # already printed by network thread
+                    pass
                 elif msg.get("type") == GAME_STATE:
                     last_state      = msg
                     last_state_time = time.monotonic()
@@ -205,7 +215,6 @@ def main() -> None:
         except queue.Empty:
             pass
 
-        # --- Render ---
         if last_state:
             elapsed = time.monotonic() - last_state_time
             interp  = interpolate(last_state, elapsed)
@@ -214,6 +223,30 @@ def main() -> None:
             renderer.render_waiting(screen)
 
         pygame.display.flip()
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    pygame.init()
+    screen = pygame.display.set_mode((WIN_W, WIN_H))
+    pygame.display.set_caption("Indiscreet Chess")
+
+    config = run_menu(screen)
+
+    server_proc = None
+    if config["mode"] in ("solo", "host"):
+        server_proc = _spawn_server(config)
+        time.sleep(0.5)   # give server time to bind
+
+    try:
+        _game_loop(screen, config)
+    finally:
+        if server_proc:
+            server_proc.terminate()
+            server_proc.wait()
 
 
 if __name__ == "__main__":

@@ -140,6 +140,36 @@ def _ccd_loop(pieces: list[Piece], dt: float) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _is_forward_pawn(piece: Piece) -> bool:
+    """True when this pawn is moving in its forward (non-capturing) direction."""
+    if piece.type != PieceType.PAWN:
+        return False
+    speed = math.hypot(piece.vel_x, piece.vel_y)
+    if speed < 1e-9:
+        return False
+    forward_dy = -1.0 if piece.owner == "white" else 1.0
+    dot = (piece.vel_y * forward_dy) / speed
+    freedom = math.radians(params.MOVEMENT_FREEDOM_DEG)
+    return math.acos(max(-1.0, min(1.0, dot))) <= freedom
+
+
+def _continue_after_capture(piece: Piece, cx: float, cy: float) -> None:
+    """Continue piece in same direction, stopping when cx,cy is perpendicular."""
+    speed = params.MOVEMENT_SPEED
+    ux = piece.vel_x / speed
+    uy = piece.vel_y / speed
+    perp_dist = max(0.0, (cx - piece.x) * ux + (cy - piece.y) * uy)
+    remaining_dist = piece.state_timer * speed
+    t = min(perp_dist, remaining_dist)
+    piece.dest_x = piece.x + t * ux
+    piece.dest_y = piece.y + t * uy
+    piece.state_timer = t / speed
+
+
+# ---------------------------------------------------------------------------
 # Parametric sweep
 # ---------------------------------------------------------------------------
 
@@ -155,9 +185,9 @@ def _sweep_time(a: Piece, b: Piece, max_t: float) -> float | None:
     vy = a.vel_y - (b.vel_y if b.state == PieceState.MOVING else 0.0)
     R = a.radius + b.radius
 
-    # Ghosts can only be captured by enemy pawns; all other pieces pass through.
+    # Ghosts can only be captured by enemy pawns moving diagonally.
     if b.type == PieceType.GHOST:
-        if a.type != PieceType.PAWN or a.owner == b.owner:
+        if a.type != PieceType.PAWN or a.owner == b.owner or _is_forward_pawn(a):
             return None
 
     # Skip if already overlapping (can happen during castling or after a capture).
@@ -199,10 +229,12 @@ def _resolve_collision(a: Piece, b: Piece, removed: set) -> None:
     b_moving = b.state == PieceState.MOVING
     b_immune = b.type == PieceType.KNIGHT and b_moving
 
+    # Forward-moving pawns cannot capture anything.
     a_captures_b = (
         b.owner != a.owner
         and a.capture_remaining > 0
         and not b_immune
+        and not _is_forward_pawn(a)
     )
     b_captures_a = (
         b_moving
@@ -211,19 +243,25 @@ def _resolve_collision(a: Piece, b: Piece, removed: set) -> None:
     )
 
     if a_captures_b:
-        captured_x, captured_y = b.x, b.y
+        # Ghost capture: remove ghost, pawn continues to its original destination.
+        if b.type == PieceType.GHOST:
+            removed.add(id(b))
+            return
+
         removed.add(id(b))
         a.capture_remaining -= 1
 
         if b_captures_a:
-            # Mutual capture: both removed.
             removed.add(id(a))
         else:
-            # A captured B; A continues to B's center position.
-            a.dest_x = captured_x
-            a.dest_y = captured_y
-            # Remaining travel: from contact point to B's center = sum of radii.
-            a.state_timer = (a.radius + b.radius) / params.MOVEMENT_SPEED
+            _continue_after_capture(a, b.x, b.y)
+
+    elif b_captures_a:
+        # A can't (or won't) capture B, but B is a moving enemy that can capture A.
+        removed.add(id(a))
+        b.capture_remaining -= 1
+        _continue_after_capture(b, a.x, a.y)
+
     else:
         # A is blocked: stop at the current contact point.
         a.stop_at(a.x, a.y)

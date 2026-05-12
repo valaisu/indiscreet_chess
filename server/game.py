@@ -3,7 +3,7 @@ import math
 
 from . import params, physics
 from .pieces import Piece, PieceType, PieceState, initial_board
-from .rules import validate_move, seg_dist as _seg_dist
+from .rules import validate_move
 from shared.protocol import GAME_STATE, MOVE_REJECTED, GAME_OVER
 
 
@@ -319,8 +319,7 @@ class GameState:
                        ghost: Piece) -> bool:
         if piece.type != PieceType.PAWN:
             return False
-        return _seg_dist(ghost.x, ghost.y, piece.x, piece.y, dest_x, dest_y) \
-               <= params.DIAMETER_PIECE
+        return math.hypot(ghost.x - dest_x, ghost.y - dest_y) < params.DIAMETER_PIECE
 
     # ------------------------------------------------------------------
     # Win condition
@@ -355,6 +354,7 @@ class GameState:
             "tick": self.tick,
             "pieces": [p.to_dict() for p in self.pieces],
             "mana": {k: round(v, 3) for k, v in self.mana.items()},
+            "max_mana": params.MAXIMUM_MANA,
             "game_over": self.game_over,
             "winner": self.winner,
         }

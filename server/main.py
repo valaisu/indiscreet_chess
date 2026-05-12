@@ -102,11 +102,29 @@ class Server:
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Indiscreet Chess server")
-    parser.add_argument("--solo", action="store_true",
-                        help="Accept one client that controls both colors")
-    parser.add_argument("--host", default=params.SERVER_HOST)
-    parser.add_argument("--port", type=int, default=params.SERVER_PORT)
+    parser.add_argument("--solo",        action="store_true")
+    parser.add_argument("--host",        default=params.SERVER_HOST)
+    parser.add_argument("--port",        type=int,   default=params.SERVER_PORT)
+    parser.add_argument("--mana-refill", type=float, default=params.MANA_REFILL_RATE)
+    parser.add_argument("--max-mana",    type=float, default=params.MAXIMUM_MANA)
+    parser.add_argument("--base-cost",   type=float, default=params.BASE_MOVE_COST)
+    parser.add_argument("--dist-cost",   type=float, default=params.DISTANCE_COST)
+    parser.add_argument("--prep",        type=float, default=params.PREPARATION_PERIOD)
+    parser.add_argument("--speed",       type=float, default=params.MOVEMENT_SPEED)
+    parser.add_argument("--cooldown",    type=float, default=params.COOLDOWN)
+    parser.add_argument("--freedom",     type=float, default=params.MOVEMENT_FREEDOM_DEG)
+    parser.add_argument("--diameter",    type=float, default=params.DIAMETER_PIECE)
     args = parser.parse_args()
+
+    params.MANA_REFILL_RATE      = args.mana_refill
+    params.MAXIMUM_MANA          = args.max_mana
+    params.BASE_MOVE_COST        = args.base_cost
+    params.DISTANCE_COST         = args.dist_cost
+    params.PREPARATION_PERIOD    = args.prep
+    params.MOVEMENT_SPEED        = args.speed
+    params.COOLDOWN              = args.cooldown
+    params.MOVEMENT_FREEDOM_DEG  = args.freedom
+    params.DIAMETER_PIECE        = args.diameter
 
     server = Server(solo=args.solo)
     print(f"[server] Listening on {args.host}:{args.port} "

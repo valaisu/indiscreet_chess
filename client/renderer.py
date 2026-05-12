@@ -7,6 +7,8 @@ Board coordinate system (matches server):
   Each square has side = SQUARE_SIDE board units = SQ pixels.
 """
 
+import math
+
 import pygame
 
 # ---------------------------------------------------------------------------
@@ -49,6 +51,36 @@ C_MANA_BLACK   = (180,  60,  60)
 C_TEXT         = (220, 220, 220)
 C_OVERLAY      = (  0,   0,   0, 160)
 C_WIN_TEXT     = (255, 220, 100)
+C_HINT         = (100, 210, 100,  45)   # move-hint wedge fill
+
+_SQRT2       = math.sqrt(2.0)
+_FREEDOM_RAD = math.radians(5.0)
+_ORTHO = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+_DIAG  = [( 1/_SQRT2,  1/_SQRT2), ( 1/_SQRT2, -1/_SQRT2),
+          (-1/_SQRT2,  1/_SQRT2), (-1/_SQRT2, -1/_SQRT2)]
+_ALL8  = _ORTHO + _DIAG
+
+
+def _max_to_edge(bx: float, by: float, lx: float, ly: float) -> float:
+    """Board units from (bx, by) to the board edge in direction (lx, ly)."""
+    t = 8.0
+    if lx > 1e-9:    t = min(t, (8.0 - bx) / lx)
+    elif lx < -1e-9: t = min(t, bx / -lx)
+    if ly > 1e-9:    t = min(t, (8.0 - by) / ly)
+    elif ly < -1e-9: t = min(t, by / -ly)
+    return max(0.0, t)
+
+
+def _wedge(surf: pygame.Surface, cx: float, cy: float,
+           angle: float, half: float, r: float, n: int = 12) -> None:
+    """Draw a filled wedge on surf centred at (cx,cy)."""
+    if r < 1:
+        return
+    pts = [(cx, cy)]
+    for i in range(n + 1):
+        a = angle - half + 2 * half * i / n
+        pts.append((cx + math.cos(a) * r, cy + math.sin(a) * r))
+    pygame.draw.polygon(surf, C_HINT, pts)
 
 # ---------------------------------------------------------------------------
 # Piece labels
@@ -94,6 +126,7 @@ class Renderer:
                selected_id: str | None) -> None:
         screen.fill(C_BG)
         self._draw_board(screen)
+        self._draw_move_hints(screen, state, selected_id)
         self._draw_dest_markers(screen, state)
         self._draw_pieces(screen, state, selected_id)
         self._draw_mana_bars(screen, state)
@@ -106,6 +139,60 @@ class Renderer:
         t = self._font_ui.render("Waiting for opponent…", True, C_TEXT)
         screen.blit(t, (WIN_W // 2 - t.get_width() // 2,
                         WIN_H // 2 - t.get_height() // 2))
+
+    # ------------------------------------------------------------------
+    # Movement hints (drawn on board after squares, before pieces)
+    # ------------------------------------------------------------------
+
+    def _draw_move_hints(self, screen: pygame.Surface, state: dict,
+                          selected_id: str | None) -> None:
+        if not selected_id:
+            return
+        piece = next((p for p in state["pieces"] if p["id"] == selected_id), None)
+        if not piece or piece["state"] != "idle":
+            return
+
+        bx, by = piece["x"], piece["y"]
+        cx, cy = board_to_px(bx, by)
+        ptype  = piece["type"]
+
+        surf = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
+        surf.set_clip(pygame.Rect(BOARD_X, BOARD_Y, 8 * SQ, 8 * SQ))
+
+        if ptype == "knight":
+            s = 1.0
+            r_px = max(4, int(math.sqrt(5.0) * s * math.tan(_FREEDOM_RAD) * SQ))
+            for a, b in [(2,1),(2,-1),(-2,1),(-2,-1),(1,2),(1,-2),(-1,2),(-1,-2)]:
+                tx, ty = bx + a * s, by + b * s
+                if 0 <= tx <= 8 and 0 <= ty <= 8:
+                    px2, py2 = board_to_px(tx, ty)
+                    pygame.draw.circle(surf, C_HINT, (px2, py2), r_px)
+
+        elif ptype == "pawn":
+            fwd = -1.0 if piece["owner"] == "white" else 1.0
+            max_fwd = 1.0 if piece.get("has_moved") else 2.0
+            _wedge(surf, cx, cy, math.atan2(fwd, 0.0), _FREEDOM_RAD,
+                   max_fwd * SQ)
+            for xdir in (1.0, -1.0):
+                a = math.atan2(fwd / _SQRT2, xdir / _SQRT2)
+                _wedge(surf, cx, cy, a, _FREEDOM_RAD, _SQRT2 * SQ)
+
+        elif ptype == "king":
+            unmoved = not piece.get("has_moved", False)
+            for lx, ly in _ALL8:
+                is_horiz = (ly == 0.0)
+                cap = (2.0 if (is_horiz and unmoved)
+                       else (1.0 if (lx == 0.0 or ly == 0.0) else _SQRT2))
+                _wedge(surf, cx, cy, math.atan2(ly, lx), _FREEDOM_RAD,
+                       cap * SQ)
+
+        else:
+            dirs = {"rook": _ORTHO, "bishop": _DIAG, "queen": _ALL8}.get(ptype, [])
+            for lx, ly in dirs:
+                r = _max_to_edge(bx, by, lx, ly) * SQ
+                _wedge(surf, cx, cy, math.atan2(ly, lx), _FREEDOM_RAD, r)
+
+        screen.blit(surf, (0, 0))
 
     # ------------------------------------------------------------------
     # Board
@@ -197,24 +284,24 @@ class Renderer:
     # ------------------------------------------------------------------
 
     def _draw_mana_bars(self, screen: pygame.Surface, state: dict) -> None:
-        mana = state.get("mana", {})
-        bar_w = 8 * SQ
+        mana    = state.get("mana", {})
+        max_mana = state.get("max_mana", MANA_MAX)
+        bar_w   = 8 * SQ
 
-        # Black's bar: above the board
         self._draw_one_mana(screen, mana.get("black", 0.0), "black",
-                             BOARD_X, BOARD_Y - MANA_H - 6, bar_w)
-        # White's bar: below the board
+                             BOARD_X, BOARD_Y - MANA_H - 6, bar_w, max_mana)
         self._draw_one_mana(screen, mana.get("white", 0.0), "white",
-                             BOARD_X, BOARD_Y + 8 * SQ + 6, bar_w)
+                             BOARD_X, BOARD_Y + 8 * SQ + 6, bar_w, max_mana)
 
     def _draw_one_mana(self, screen: pygame.Surface, value: float,
-                        owner: str, x: int, y: int, w: int) -> None:
-        fill_w = int(w * max(0.0, value) / MANA_MAX)
+                        owner: str, x: int, y: int, w: int,
+                        max_mana: float) -> None:
+        fill_w = int(w * max(0.0, value) / max_mana)
         bar_color = C_MANA_BLACK if owner == "black" else C_MANA_WHITE
         pygame.draw.rect(screen, C_MANA_BG, (x, y, w, MANA_H))
         pygame.draw.rect(screen, bar_color, (x, y, fill_w, MANA_H))
         pygame.draw.rect(screen, C_TEXT, (x, y, w, MANA_H), 1)
-        lbl = self._font_ui.render(f"{owner.capitalize()}  {value:.1f} / {MANA_MAX:.0f}",
+        lbl = self._font_ui.render(f"{owner.capitalize()}  {value:.1f} / {max_mana:.0f}",
                                     True, C_TEXT)
         screen.blit(lbl, (x + 4, y + MANA_H // 2 - lbl.get_height() // 2))
 

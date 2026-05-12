@@ -91,7 +91,7 @@ A moving piece captures an enemy piece the instant their hitboxes first touch.
 If both pieces are moving at the moment their hitboxes touch, both pieces are removed simultaneously.
 
 ### Continued Movement After Capture
-If a moving piece captures an enemy piece and is not itself captured, it continues moving — but only until its centerpoint reaches the position where the captured piece's centerpoint was at the moment of capture. It then stops (and enters cooldown).
+If a moving piece captures an enemy piece and is not itself captured, it continues moving in the same direction — stopping at whichever comes first: the point where the captured piece's centerpoint lies on a perpendicular to the direction of movement, or the piece's original destination. It then stops (and enters cooldown).
 
 ### Capture Limit
 Each piece may capture at most one enemy piece per move execution. **Exception**: the Knight (see Knight rules below).

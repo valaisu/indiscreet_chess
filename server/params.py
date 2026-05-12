@@ -1,6 +1,6 @@
 TICK_RATE: int = 20               # ticks per second
-MANA_REFILL_RATE: float = 1.0    # mana per second
-MAXIMUM_MANA: float = 10.0
+MANA_REFILL_RATE: float = 0.3    # mana per second
+MAXIMUM_MANA: float = 5.0
 BASE_MOVE_COST: float = 1.0
 DISTANCE_COST: float = 0.2       # mana per board unit
 MOVEMENT_FREEDOM_DEG: float = 5.0
