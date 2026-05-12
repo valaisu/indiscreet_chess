@@ -12,6 +12,7 @@ class PieceType(Enum):
     BISHOP = "bishop"
     QUEEN = "queen"
     KING = "king"
+    GHOST = "ghost"   # en passant ghost — stationary, capturable by enemy pawns only
 
 
 class PieceState(Enum):
@@ -34,7 +35,15 @@ class Piece:
     dest_y: float = 0.0
     vel_x: float = 0.0
     vel_y: float = 0.0
-    has_moved: bool = False    # used by castling and pawn double-move logic
+    has_moved: bool = False          # used by castling and pawn double-move logic
+    capture_remaining: int = 1       # captures left this move; reset on each move start
+    # Castling
+    castling_partner_id: str = ""    # ID of king/rook partner during castling transit
+    pending_castling_rook_id: str = ""  # set on king during PREPARATION for a castling move
+    # En passant ghost creation
+    is_double_move: bool = False     # this move is a pawn double-step
+    ghost_created: bool = False      # ghost has already been spawned for this move
+    move_start_y: float = 0.0       # pawn's y at the moment the double move was queued
 
     @property
     def radius(self) -> float:
@@ -67,6 +76,7 @@ class Piece:
         self.state = PieceState.MOVING
         self.state_timer = dist / speed   # time until arrival
         self.has_moved = True
+        self.capture_remaining = 1
 
     def _advance_movement(self, dt: float) -> None:
         if dt >= self.state_timer:
@@ -101,6 +111,8 @@ class Piece:
             "state_timer": round(self.state_timer, 4),
             "dest_x": round(self.dest_x, 4),
             "dest_y": round(self.dest_y, 4),
+            "vel_x": round(self.vel_x, 4),
+            "vel_y": round(self.vel_y, 4),
             "has_moved": self.has_moved,
         }
 

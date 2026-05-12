@@ -1,0 +1,229 @@
+"""
+Continuous collision detection and resolution.
+
+Called once per tick from GameState._tick():
+    physics.advance_and_resolve(self.pieces, dt)
+
+Algorithm
+---------
+Knights are immune during movement and advance independently; burst capture
+fires on arrival.
+
+For all other movers we run an event-driven CCD loop:
+
+  while remaining_dt > 0:
+    find earliest of:
+      - collision: smallest t from parametric circle sweeps across all
+                   (mover, non-immune-piece) pairs
+      - arrival:   smallest state_timer among movers
+    advance all movers to that t
+    resolve the event (collision or natural stop)
+    remaining_dt -= t
+
+This guarantees correct ordering when multiple pieces are moving simultaneously.
+"""
+
+import math
+
+from . import params
+from .pieces import Piece, PieceType, PieceState
+
+# Small epsilon to avoid re-detecting the same surface contact.
+_EPS = 1e-9
+
+
+def advance_and_resolve(pieces: list[Piece], dt: float) -> None:
+    """Main physics entry point. Mutates the pieces list in-place."""
+    _advance_knights(pieces, dt)
+    _ccd_loop(pieces, dt)
+
+
+# ---------------------------------------------------------------------------
+# Knights
+# ---------------------------------------------------------------------------
+
+def _advance_knights(pieces: list[Piece], dt: float) -> None:
+    to_remove: set[int] = set()  # ids of pieces to remove (use id() to avoid equality issues)
+    piece_map = {id(p): p for p in pieces}
+
+    for knight in list(pieces):
+        if knight.type != PieceType.KNIGHT or knight.state != PieceState.MOVING:
+            continue
+        knight.advance(dt)
+        if knight.state == PieceState.COOLDOWN and id(knight) not in to_remove:
+            _knight_burst(knight, pieces, to_remove)
+
+    pieces[:] = [p for p in pieces if id(p) not in to_remove]
+
+
+def _knight_burst(knight: Piece, pieces: list[Piece], to_remove: set) -> None:
+    """Remove all pieces overlapping the knight on arrival; remove knight if any were moving."""
+    R = knight.radius  # each piece has same radius, sum = diameter
+    for other in pieces:
+        if other is knight or id(other) in to_remove:
+            continue
+        dist = math.hypot(other.x - knight.x, other.y - knight.y)
+        if dist <= knight.radius + other.radius:
+            to_remove.add(id(other))
+            if other.state == PieceState.MOVING:
+                to_remove.add(id(knight))
+
+
+# ---------------------------------------------------------------------------
+# CCD loop
+# ---------------------------------------------------------------------------
+
+def _ccd_loop(pieces: list[Piece], dt: float) -> None:
+    removed: set[int] = set()
+    remaining = dt
+
+    while remaining > _EPS:
+        movers = [p for p in pieces
+                  if p.state == PieceState.MOVING
+                  and id(p) not in removed
+                  and p.type != PieceType.KNIGHT]
+
+        if not movers:
+            break
+
+        # --- Find earliest collision ---
+        col_t = remaining + 1.0   # sentinel: > remaining means none found
+        col_pair: tuple[Piece, Piece] | None = None
+
+        for a in movers:
+            for b in pieces:
+                if b is a or id(b) in removed:
+                    continue
+                # Knights in MOVING state are immune to collision
+                if b.type == PieceType.KNIGHT and b.state == PieceState.MOVING:
+                    continue
+                # Castling partners are allowed to overlap during transit
+                if a.castling_partner_id and b.id == a.castling_partner_id:
+                    continue
+                t = _sweep_time(a, b, remaining)
+                if t is not None and t < col_t:
+                    col_t = t
+                    col_pair = (a, b)
+
+        # --- Find earliest arrival ---
+        arr_t = remaining + 1.0   # sentinel
+        for p in movers:
+            if p.state_timer < arr_t:
+                arr_t = p.state_timer
+
+        # --- Pick next event ---
+        if col_t <= remaining and col_t <= arr_t:
+            event_t = col_t
+            is_collision = True
+        elif arr_t <= remaining:
+            event_t = arr_t
+            is_collision = False
+        else:
+            # No events left: advance all movers to end of remaining.
+            for p in movers:
+                p._advance_movement(remaining)
+            break
+
+        # Advance all movers to the event time.
+        for p in movers:
+            p._advance_movement(event_t)
+        remaining -= event_t
+
+        if is_collision:
+            assert col_pair is not None
+            a, b = col_pair
+            _resolve_collision(a, b, removed)
+        # Arrival events are handled implicitly: _advance_movement transitions
+        # the piece to COOLDOWN when state_timer is exhausted.
+
+    pieces[:] = [p for p in pieces if id(p) not in removed]
+
+
+# ---------------------------------------------------------------------------
+# Parametric sweep
+# ---------------------------------------------------------------------------
+
+def _sweep_time(a: Piece, b: Piece, max_t: float) -> float | None:
+    """
+    Return the earliest t in (_EPS, max_t] at which moving circle a first
+    touches circle b (b may be stationary or moving at constant velocity).
+    Returns None if no contact occurs within max_t.
+    """
+    px = a.x - b.x
+    py = a.y - b.y
+    vx = a.vel_x - (b.vel_x if b.state == PieceState.MOVING else 0.0)
+    vy = a.vel_y - (b.vel_y if b.state == PieceState.MOVING else 0.0)
+    R = a.radius + b.radius
+
+    # Ghosts can only be captured by enemy pawns; all other pieces pass through.
+    if b.type == PieceType.GHOST:
+        if a.type != PieceType.PAWN or a.owner == b.owner:
+            return None
+
+    # Skip if already overlapping (can happen during castling or after a capture).
+    if px * px + py * py < R * R:
+        return None
+
+    # Quadratic: (v·v)t² + 2(p·v)t + (p·p − R²) = 0
+    A = vx * vx + vy * vy
+    if A < 1e-12:
+        return None  # no relative motion
+
+    B = 2.0 * (px * vx + py * vy)
+    C = px * px + py * py - R * R
+
+    disc = B * B - 4.0 * A * C
+    if disc < 0.0:
+        return None
+
+    sqrt_disc = math.sqrt(disc)
+    t1 = (-B - sqrt_disc) / (2.0 * A)
+    t2 = (-B + sqrt_disc) / (2.0 * A)
+
+    # Take the smaller positive root; must be within (EPS, max_t].
+    for t in (t1, t2):
+        if _EPS < t <= max_t:
+            return t
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Collision resolution
+# ---------------------------------------------------------------------------
+
+def _resolve_collision(a: Piece, b: Piece, removed: set) -> None:
+    """
+    Called when moving piece a has just touched piece b.
+    Determines capture vs block and updates piece states in-place.
+    """
+    b_moving = b.state == PieceState.MOVING
+    b_immune = b.type == PieceType.KNIGHT and b_moving
+
+    a_captures_b = (
+        b.owner != a.owner
+        and a.capture_remaining > 0
+        and not b_immune
+    )
+    b_captures_a = (
+        b_moving
+        and b.owner != a.owner
+        and b.capture_remaining > 0
+    )
+
+    if a_captures_b:
+        captured_x, captured_y = b.x, b.y
+        removed.add(id(b))
+        a.capture_remaining -= 1
+
+        if b_captures_a:
+            # Mutual capture: both removed.
+            removed.add(id(a))
+        else:
+            # A captured B; A continues to B's center position.
+            a.dest_x = captured_x
+            a.dest_y = captured_y
+            # Remaining travel: from contact point to B's center = sum of radii.
+            a.state_timer = (a.radius + b.radius) / params.MOVEMENT_SPEED
+    else:
+        # A is blocked: stop at the current contact point.
+        a.stop_at(a.x, a.y)
