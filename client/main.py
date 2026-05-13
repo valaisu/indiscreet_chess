@@ -97,12 +97,113 @@ def _spawn_server(config: dict) -> subprocess.Popen:
 # Input helpers
 # ---------------------------------------------------------------------------
 
-_CLICK_R_BOARD = 0.5    # click radius in board units — half a square, scale-independent
+_CLICK_R_SELECT = 0.5   # forgiving radius used when nothing is selected
+_CLICK_R_SWITCH = 0.3   # strict radius (≈ piece edge) used when a piece is already selected
+
+_SQRT2 = math.sqrt(2.0)
+
+
+def _snap_destination(bx: float, by: float, piece: dict,
+                      freedom_deg: float) -> tuple[float, float]:
+    """
+    Return the nearest point in the piece's legal movement area to (bx, by).
+    Legal area is a union of sectors: each direction has a cone of ±freedom_deg.
+    If the click falls inside a sector, the exact click position is used (clamped
+    to max distance). If outside all sectors, snaps to the nearest sector edge.
+    """
+    px, py = piece["x"], piece["y"]
+    ptype  = piece["type"]
+    owner  = piece["owner"]
+
+    click_dx = bx - px
+    click_dy = by - py
+    click_r  = math.hypot(click_dx, click_dy)
+    if click_r < 1e-9:
+        return (px, py)
+    nx, ny      = click_dx / click_r, click_dy / click_r
+    click_angle = math.atan2(click_dy, click_dx)
+    freedom_rad = math.radians(freedom_deg)
+
+    def board_max(dx: float, dy: float) -> float:
+        t = float("inf")
+        if dx > 1e-9:    t = min(t, (8.0 - px) / dx)
+        elif dx < -1e-9: t = min(t, px / -dx)
+        if dy > 1e-9:    t = min(t, (8.0 - py) / dy)
+        elif dy < -1e-9: t = min(t, py / -dy)
+        return max(0.0, t)
+
+    best_pt: tuple[float, float] = (bx, by)
+    best_d  = float("inf")
+
+    def try_sector(dx: float, dy: float, max_t: float) -> None:
+        nonlocal best_pt, best_d
+        if max_t <= 0:
+            return
+        center_angle = math.atan2(dy, dx)
+        delta = (click_angle - center_angle + math.pi) % (2 * math.pi) - math.pi
+
+        if abs(delta) <= freedom_rad:
+            # Inside sector: use exact click direction, clamp to max distance.
+            actual_max = min(max_t, board_max(nx, ny))
+            r  = min(click_r, actual_max)
+            cx, cy = px + r * nx, py + r * ny
+            d  = click_r - r  # >= 0 since r <= click_r
+        else:
+            # Outside sector: snap to the nearest edge ray.
+            edge_angle = center_angle + math.copysign(freedom_rad, delta)
+            ex, ey = math.cos(edge_angle), math.sin(edge_angle)
+            edge_max = min(max_t, board_max(ex, ey))
+            t  = max(0.0, min(click_dx * ex + click_dy * ey, edge_max))
+            cx, cy = px + t * ex, py + t * ey
+            d  = math.hypot(bx - cx, by - cy)
+
+        if d < best_d:
+            best_d, best_pt = d, (cx, cy)
+
+    if ptype == "knight":
+        for adx, ady in [(2,1),(2,-1),(-2,1),(-2,-1),(1,2),(1,-2),(-1,2),(-1,-2)]:
+            x, y = px + adx, py + ady
+            if 0.0 < x < 8.0 and 0.0 < y < 8.0:
+                d = math.hypot(bx - x, by - y)
+                if d < best_d:
+                    best_d, best_pt = d, (x, y)
+
+    elif ptype == "pawn":
+        fwd     = -1.0 if owner == "white" else 1.0
+        max_fwd = 1.0 if piece.get("has_moved") else 2.0
+        try_sector(0.0, fwd, min(max_fwd, board_max(0.0, fwd)))
+        d_unit = 1.0 / _SQRT2
+        for xdir in (-1.0, 1.0):
+            dx, dy = xdir * d_unit, fwd * d_unit
+            try_sector(dx, dy, min(_SQRT2, board_max(dx, dy)))
+
+    elif ptype == "king":
+        hor_max = 2.0 if not piece.get("has_moved") else 1.0
+        for dx in (1.0, -1.0):
+            try_sector(dx, 0.0, min(hor_max, board_max(dx, 0.0)))
+        for dy in (1.0, -1.0):
+            try_sector(0.0, dy, min(1.0, board_max(0.0, dy)))
+        d_unit = 1.0 / _SQRT2
+        for sdx, sdy in [(1,1),(1,-1),(-1,1),(-1,-1)]:
+            try_sector(sdx * d_unit, sdy * d_unit,
+                       min(_SQRT2, board_max(sdx * d_unit, sdy * d_unit)))
+
+    else:  # rook, bishop, queen
+        d_unit = 1.0 / _SQRT2
+        ortho = [(1.0,0.0),(-1.0,0.0),(0.0,1.0),(0.0,-1.0)]
+        diag  = [(d_unit,d_unit),(d_unit,-d_unit),(-d_unit,d_unit),(-d_unit,-d_unit)]
+        if ptype == "rook":     dirs = ortho
+        elif ptype == "bishop": dirs = diag
+        else:                   dirs = ortho + diag
+        for dx, dy in dirs:
+            try_sector(dx, dy, board_max(dx, dy))
+
+    return best_pt
 
 
 def _find_piece_at(bx: float, by: float,
-                   pieces: list[dict]) -> dict | None:
-    best, best_d = None, _CLICK_R_BOARD
+                   pieces: list[dict], radius: float) -> dict | None:
+    best, best_d = None, radius
     for p in pieces:
         if p["type"] == "ghost":
             continue
@@ -125,27 +226,32 @@ def _handle_click(mouse_pos: tuple[int, int],
         return selected_id
 
     pieces = state["pieces"]
-    clicked = _find_piece_at(bx, by, pieces)
 
     if selected_id is None:
+        clicked = _find_piece_at(bx, by, pieces, _CLICK_R_SELECT)
         if clicked:
             mine = solo or clicked["owner"] == player_color
             if mine and clicked["state"] == "idle":
                 return clicked["id"]
 
     else:
+        # Strict hit-test: auto-switching is off; only an exact click on a piece counts.
+        clicked = _find_piece_at(bx, by, pieces, _CLICK_R_SWITCH)
+
         if clicked and clicked["id"] == selected_id:
-            return None  # deselect
+            return None  # clicked own piece → deselect
 
         sel = next((p for p in pieces if p["id"] == selected_id), None)
         if clicked and clicked["state"] == "idle" and sel:
             if clicked["owner"] == sel["owner"]:
-                return clicked["id"]
+                return clicked["id"]  # precise click on friendly piece → switch
 
+        freedom = state.get("freedom_deg", 5.0)
+        dest_x, dest_y = _snap_destination(bx, by, sel, freedom) if sel else (bx, by)
         send_q.put({
             "type": QUEUE_MOVE,
             "piece_id": selected_id,
-            "destination": [round(bx, 3), round(by, 3)],
+            "destination": [dest_x, dest_y],
         })
         return None
 
