@@ -20,8 +20,8 @@ import pygame
 
 from client.menu import run_menu
 from client.renderer import (
-    Renderer, board_to_px, px_to_board,
-    PIECE_R, SQ, WIN_W, WIN_H,
+    Renderer, WIN_W, WIN_H,
+    draw_fullscreen_btn, fullscreen_btn_rect,
 )
 from client.interpolator import interpolate
 from shared.protocol import (
@@ -97,7 +97,7 @@ def _spawn_server(config: dict) -> subprocess.Popen:
 # Input helpers
 # ---------------------------------------------------------------------------
 
-_CLICK_R_BOARD = (PIECE_R / SQ) + 0.05   # click radius in board units
+_CLICK_R_BOARD = 0.35   # click radius in board units (PIECE_R/SQ + 0.05, scale-independent)
 
 
 def _find_piece_at(bx: float, by: float,
@@ -118,8 +118,9 @@ def _handle_click(mouse_pos: tuple[int, int],
                   selected_id: str | None,
                   send_q: queue.Queue,
                   player_color: str,
-                  solo: bool) -> str | None:
-    bx, by = px_to_board(*mouse_pos)
+                  solo: bool,
+                  renderer: Renderer) -> str | None:
+    bx, by = renderer.px_to_board(*mouse_pos)
     if not (0 <= bx < 8 and 0 <= by < 8):
         return selected_id
 
@@ -187,7 +188,9 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
                 sys.exit()
 
             if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
+                if event.key == pygame.K_F11:
+                    pygame.display.toggle_fullscreen()
+                elif event.key == pygame.K_ESCAPE:
                     if last_state and last_state.get("game_over"):
                         return
                     elif selected_id is not None:
@@ -196,11 +199,15 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
                         return
 
             if event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 1 and last_state and not last_state.get("game_over"):
-                    selected_id = _handle_click(
-                        event.pos, last_state, selected_id,
-                        send_q, player_color, solo,
-                    )
+                if event.button == 1:
+                    w, h = screen.get_size()
+                    if fullscreen_btn_rect(w, h).collidepoint(event.pos):
+                        pygame.display.toggle_fullscreen()
+                    elif last_state and not last_state.get("game_over"):
+                        selected_id = _handle_click(
+                            event.pos, last_state, selected_id,
+                            send_q, player_color, solo, renderer,
+                        )
                 if event.button == 3:
                     selected_id = None
 
@@ -224,6 +231,8 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
         else:
             renderer.render_waiting(screen)
 
+        mx, my = pygame.mouse.get_pos()
+        draw_fullscreen_btn(screen, bool(screen.get_flags() & pygame.FULLSCREEN), mx, my)
         pygame.display.flip()
 
 
@@ -233,7 +242,7 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
 
 def main() -> None:
     pygame.init()
-    screen = pygame.display.set_mode((WIN_W, WIN_H))
+    screen = pygame.display.set_mode((WIN_W, WIN_H), pygame.RESIZABLE)
     pygame.display.set_caption("Indiscreet Chess")
 
     while True:

@@ -4,7 +4,7 @@ All pygame drawing code. No game logic here.
 Board coordinate system (matches server):
   (0, 0) = top-left (black back rank)
   (8, 8) = bottom-right (white back rank)
-  Each square has side = SQUARE_SIDE board units = SQ pixels.
+  Each square has side = SQUARE_SIDE board units = SQ pixels at base scale.
 """
 
 import math
@@ -12,19 +12,20 @@ import math
 import pygame
 
 # ---------------------------------------------------------------------------
-# Layout
+# Base logical resolution  (800 × 840 reference window)
 # ---------------------------------------------------------------------------
 
-SQ = 80          # pixels per board unit (SQUARE_SIDE = 1.0)
-BOARD_X = 80     # board left edge in pixels
-BOARD_Y = 100    # board top edge (leaves room for black mana bar above)
-PIECE_R = int(0.3 * SQ)   # piece radius in pixels (= DIAMETER_PIECE/2 * SQ)
+WIN_W = 800
+WIN_H = 840
 
-WIN_W = 2 * BOARD_X + 8 * SQ   # 800
-WIN_H = BOARD_Y + 8 * SQ + 100  # 840
+# Legacy module-level values — used by main.py to compute _CLICK_R_BOARD
+# (which is scale-independent, expressed in board units)
+SQ      = 80
+PIECE_R = 24   # int(0.3 * SQ)
 
-MANA_H = 22        # mana bar height in pixels
-MANA_MAX = 10.0    # must match server params.MAXIMUM_MANA
+_BASE_BOARD_X = 80
+_BASE_BOARD_Y = 100
+_BASE_MANA_H  = 22
 
 # ---------------------------------------------------------------------------
 # Colors
@@ -40,9 +41,9 @@ C_BLACK_FILL   = ( 45,  45,  45)
 C_WHITE_BORDER = (160, 160, 160)
 C_BLACK_BORDER = (210, 210, 210)
 
-C_SELECT       = ( 80, 210,  80)   # selection ring
-C_DEST_MARKER  = (220, 200,  50)   # destination dot
-C_GHOST_FILL   = (160, 160, 200)   # ghost piece (also drawn semi-transparent)
+C_SELECT       = ( 80, 210,  80)
+C_DEST_MARKER  = (220, 200,  50)
+C_GHOST_FILL   = (160, 160, 200)
 
 C_MANA_BG      = ( 25,  25,  55)
 C_MANA_WHITE   = ( 70, 130, 200)
@@ -51,10 +52,9 @@ C_MANA_BLACK   = (180,  60,  60)
 C_TEXT         = (220, 220, 220)
 C_OVERLAY      = (  0,   0,   0, 160)
 C_WIN_TEXT     = (255, 220, 100)
-C_HINT         = (100, 210, 100,  45)   # move-hint wedge fill
+C_HINT         = (100, 210, 100,  45)
 
-_SQRT2       = math.sqrt(2.0)
-_FREEDOM_RAD = math.radians(5.0)
+_SQRT2 = math.sqrt(2.0)
 _ORTHO = [(1, 0), (-1, 0), (0, 1), (0, -1)]
 _DIAG  = [( 1/_SQRT2,  1/_SQRT2), ( 1/_SQRT2, -1/_SQRT2),
           (-1/_SQRT2,  1/_SQRT2), (-1/_SQRT2, -1/_SQRT2)]
@@ -62,7 +62,6 @@ _ALL8  = _ORTHO + _DIAG
 
 
 def _max_to_edge(bx: float, by: float, lx: float, ly: float) -> float:
-    """Board units from (bx, by) to the board edge in direction (lx, ly)."""
     t = 8.0
     if lx > 1e-9:    t = min(t, (8.0 - bx) / lx)
     elif lx < -1e-9: t = min(t, bx / -lx)
@@ -73,7 +72,6 @@ def _max_to_edge(bx: float, by: float, lx: float, ly: float) -> float:
 
 def _wedge(surf: pygame.Surface, cx: float, cy: float,
            angle: float, half: float, r: float, n: int = 12) -> None:
-    """Draw a filled wedge on surf centred at (cx,cy)."""
     if r < 1:
         return
     pts = [(cx, cy)]
@@ -92,16 +90,40 @@ LABELS = {
 }
 
 # ---------------------------------------------------------------------------
-# Coordinate helpers (used by main.py too)
+# Fullscreen button  (fixed pixel size, drawn on top of everything)
 # ---------------------------------------------------------------------------
 
-def board_to_px(bx: float, by: float) -> tuple[int, int]:
-    return (int(BOARD_X + bx * SQ), int(BOARD_Y + by * SQ))
+def fullscreen_btn_rect(win_w: int, win_h: int) -> pygame.Rect:
+    return pygame.Rect(win_w - 36, 8, 28, 28)
 
 
-def px_to_board(px: int, py: int) -> tuple[float, float]:
-    return ((px - BOARD_X) / SQ, (py - BOARD_Y) / SQ)
+def draw_fullscreen_btn(screen: pygame.Surface, is_fs: bool,
+                        mx: int, my: int) -> None:
+    r = fullscreen_btn_rect(*screen.get_size())
+    pygame.draw.rect(screen, (80, 80, 110) if r.collidepoint(mx, my) else (50, 50, 70),
+                     r, border_radius=4)
+    _draw_fs_icon(screen, r, is_fs)
 
+
+def _draw_fs_icon(screen: pygame.Surface, r: pygame.Rect, is_fs: bool) -> None:
+    pad, arm, lw = 5, 5, 2
+    x1, y1 = r.left  + pad, r.top    + pad
+    x2, y2 = r.right - pad - 1, r.bottom - pad - 1
+    c = C_TEXT
+    if not is_fs:
+        pygame.draw.lines(screen, c, False, [(x1 + arm, y1), (x1, y1), (x1, y1 + arm)], lw)
+        pygame.draw.lines(screen, c, False, [(x2 - arm, y1), (x2, y1), (x2, y1 + arm)], lw)
+        pygame.draw.lines(screen, c, False, [(x1 + arm, y2), (x1, y2), (x1, y2 - arm)], lw)
+        pygame.draw.lines(screen, c, False, [(x2 - arm, y2), (x2, y2), (x2, y2 - arm)], lw)
+    else:
+        cx, cy = r.centerx, r.centery
+        d = (x2 - x1) // 4
+        ix1, iy1 = cx - d, cy - d
+        ix2, iy2 = cx + d, cy + d
+        pygame.draw.lines(screen, c, False, [(ix1 - arm, iy1), (ix1, iy1), (ix1, iy1 - arm)], lw)
+        pygame.draw.lines(screen, c, False, [(ix2 + arm, iy1), (ix2, iy1), (ix2, iy1 - arm)], lw)
+        pygame.draw.lines(screen, c, False, [(ix1 - arm, iy2), (ix1, iy2), (ix1, iy2 + arm)], lw)
+        pygame.draw.lines(screen, c, False, [(ix2 + arm, iy2), (ix2, iy2), (ix2, iy2 + arm)], lw)
 
 # ---------------------------------------------------------------------------
 # Renderer class
@@ -109,14 +131,54 @@ def px_to_board(px: int, py: int) -> tuple[float, float]:
 
 class Renderer:
     def __init__(self, player_color: str | None):
-        """
-        player_color: "white" | "black" — whose perspective (affects mana bar
-        label colours and selectable pieces).  None means solo (control both).
-        """
         self.player_color = player_color
-        self._font_piece = pygame.font.SysFont("dejavusans,arial,sans-serif", PIECE_R)
-        self._font_ui    = pygame.font.SysFont("dejavusans,arial,sans-serif", 16)
-        self._font_big   = pygame.font.SysFont("dejavusans,arial,sans-serif", 36)
+        self._scale   = 1.0
+        self._win_w   = WIN_W
+        self._win_h   = WIN_H
+        self._sq      = SQ
+        self._board_x = _BASE_BOARD_X
+        self._board_y = _BASE_BOARD_Y
+        self._piece_r = PIECE_R
+        self._mana_h  = _BASE_MANA_H
+        self._gap     = 4
+        self._make_fonts()
+
+    def _make_fonts(self) -> None:
+        fam = "dejavusans,arial,sans-serif"
+        self._font_piece = pygame.font.SysFont(fam, max(8,  self._piece_r))
+        self._font_ui    = pygame.font.SysFont(fam, max(8,  int(16 * self._scale)))
+        self._font_big   = pygame.font.SysFont(fam, max(12, int(36 * self._scale)))
+
+    def _update_layout(self, win_w: int, win_h: int) -> None:
+        scale = min(win_w / WIN_W, win_h / WIN_H)
+        if abs(scale - self._scale) < 0.005 and (win_w, win_h) == (self._win_w, self._win_h):
+            return
+        self._scale   = scale
+        self._win_w   = win_w
+        self._win_h   = win_h
+        self._sq      = max(1,  int(SQ           * scale))
+        self._piece_r = max(4,  int(PIECE_R      * scale))
+        self._mana_h  = max(4,  int(_BASE_MANA_H * scale))
+        self._gap     = max(2,  int(4            * scale))
+        lw    = int(WIN_W * scale)
+        lh    = int(WIN_H * scale)
+        off_x = (win_w - lw) // 2
+        off_y = (win_h - lh) // 2
+        self._board_x = off_x + int(_BASE_BOARD_X * scale)
+        self._board_y = off_y + int(_BASE_BOARD_Y * scale)
+        self._make_fonts()
+
+    # ------------------------------------------------------------------
+    # Coordinate helpers
+    # ------------------------------------------------------------------
+
+    def board_to_px(self, bx: float, by: float) -> tuple[int, int]:
+        return (int(self._board_x + bx * self._sq),
+                int(self._board_y + by * self._sq))
+
+    def px_to_board(self, px: int, py: int) -> tuple[float, float]:
+        return ((px - self._board_x) / self._sq,
+                (py - self._board_y) / self._sq)
 
     # ------------------------------------------------------------------
     # Public entry points
@@ -124,6 +186,7 @@ class Renderer:
 
     def render(self, screen: pygame.Surface, state: dict,
                selected_id: str | None) -> None:
+        self._update_layout(*screen.get_size())
         screen.fill(C_BG)
         self._draw_board(screen)
         self._draw_move_hints(screen, state, selected_id)
@@ -134,14 +197,15 @@ class Renderer:
             self._draw_game_over(screen, state.get("winner"))
 
     def render_waiting(self, screen: pygame.Surface) -> None:
+        self._update_layout(*screen.get_size())
         screen.fill(C_BG)
         self._draw_board(screen)
         t = self._font_ui.render("Waiting for opponent…", True, C_TEXT)
-        screen.blit(t, (WIN_W // 2 - t.get_width() // 2,
-                        WIN_H // 2 - t.get_height() // 2))
+        screen.blit(t, (self._win_w // 2 - t.get_width() // 2,
+                        self._win_h // 2 - t.get_height() // 2))
 
     # ------------------------------------------------------------------
-    # Movement hints (drawn on board after squares, before pieces)
+    # Movement hints
     # ------------------------------------------------------------------
 
     def _draw_move_hints(self, screen: pygame.Surface, state: dict,
@@ -153,42 +217,41 @@ class Renderer:
             return
 
         bx, by = piece["x"], piece["y"]
-        cx, cy = board_to_px(bx, by)
+        cx, cy = self.board_to_px(bx, by)
         ptype  = piece["type"]
         fr     = math.radians(state.get("freedom_deg", 5.0))
 
-        surf = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
-        surf.set_clip(pygame.Rect(BOARD_X, BOARD_Y, 8 * SQ, 8 * SQ))
+        surf = pygame.Surface((self._win_w, self._win_h), pygame.SRCALPHA)
+        surf.set_clip(pygame.Rect(self._board_x, self._board_y,
+                                   8 * self._sq, 8 * self._sq))
 
         if ptype == "knight":
-            s = 1.0
-            r_px = max(4, int(math.sqrt(5.0) * s * math.tan(fr) * SQ))
+            r_px = max(4, int(math.sqrt(5.0) * math.tan(fr) * self._sq))
             for a, b in [(2,1),(2,-1),(-2,1),(-2,-1),(1,2),(1,-2),(-1,2),(-1,-2)]:
-                tx, ty = bx + a * s, by + b * s
+                tx, ty = bx + a, by + b
                 if 0 <= tx <= 8 and 0 <= ty <= 8:
-                    px2, py2 = board_to_px(tx, ty)
+                    px2, py2 = self.board_to_px(tx, ty)
                     pygame.draw.circle(surf, C_HINT, (px2, py2), r_px)
 
         elif ptype == "pawn":
-            fwd = -1.0 if piece["owner"] == "white" else 1.0
-            max_fwd = 1.0 if piece.get("has_moved") else 2.0
-            _wedge(surf, cx, cy, math.atan2(fwd, 0.0), fr, max_fwd * SQ)
+            fwd     = -1.0 if piece["owner"] == "white" else 1.0
+            max_fwd = 1.0  if piece.get("has_moved") else 2.0
+            _wedge(surf, cx, cy, math.atan2(fwd, 0.0), fr, max_fwd * self._sq)
             for xdir in (1.0, -1.0):
                 a = math.atan2(fwd / _SQRT2, xdir / _SQRT2)
-                _wedge(surf, cx, cy, a, fr, _SQRT2 * SQ)
+                _wedge(surf, cx, cy, a, fr, _SQRT2 * self._sq)
 
         elif ptype == "king":
             unmoved = not piece.get("has_moved", False)
             for lx, ly in _ALL8:
-                is_horiz = (ly == 0.0)
-                cap = (2.0 if (is_horiz and unmoved)
+                cap = (2.0 if (ly == 0.0 and unmoved)
                        else (1.0 if (lx == 0.0 or ly == 0.0) else _SQRT2))
-                _wedge(surf, cx, cy, math.atan2(ly, lx), fr, cap * SQ)
+                _wedge(surf, cx, cy, math.atan2(ly, lx), fr, cap * self._sq)
 
         else:
             dirs = {"rook": _ORTHO, "bishop": _DIAG, "queen": _ALL8}.get(ptype, [])
             for lx, ly in dirs:
-                r = _max_to_edge(bx, by, lx, ly) * SQ
+                r = _max_to_edge(bx, by, lx, ly) * self._sq
                 _wedge(surf, cx, cy, math.atan2(ly, lx), fr, r)
 
         screen.blit(surf, (0, 0))
@@ -198,38 +261,38 @@ class Renderer:
     # ------------------------------------------------------------------
 
     def _draw_board(self, screen: pygame.Surface) -> None:
+        sq = self._sq
+        bx = self._board_x
+        by = self._board_y
         for row in range(8):
             for col in range(8):
                 color = C_LIGHT if (row + col) % 2 == 0 else C_DARK
-                pygame.draw.rect(screen, color,
-                                 (BOARD_X + col * SQ, BOARD_Y + row * SQ, SQ, SQ))
-        # Rank/file labels
+                pygame.draw.rect(screen, color, (bx + col * sq, by + row * sq, sq, sq))
         for i in range(8):
-            # Files: a–h along bottom
             lbl = self._font_ui.render("abcdefgh"[i], True, C_TEXT)
-            screen.blit(lbl, (BOARD_X + i * SQ + SQ // 2 - lbl.get_width() // 2,
-                               BOARD_Y + 8 * SQ + 4))
-            # Ranks: 8–1 along left
+            screen.blit(lbl, (bx + i * sq + sq // 2 - lbl.get_width() // 2,
+                               by + 8 * sq + self._gap))
             lbl = self._font_ui.render(str(8 - i), True, C_TEXT)
-            screen.blit(lbl, (BOARD_X - lbl.get_width() - 4,
-                               BOARD_Y + i * SQ + SQ // 2 - lbl.get_height() // 2))
-        pygame.draw.rect(screen, C_BOARD_BORDER,
-                         (BOARD_X, BOARD_Y, 8 * SQ, 8 * SQ), 2)
+            screen.blit(lbl, (bx - lbl.get_width() - self._gap,
+                               by + i * sq + sq // 2 - lbl.get_height() // 2))
+        pygame.draw.rect(screen, C_BOARD_BORDER, (bx, by, 8 * sq, 8 * sq),
+                         max(1, int(2 * self._scale)))
 
     # ------------------------------------------------------------------
     # Destination markers
     # ------------------------------------------------------------------
 
     def _draw_dest_markers(self, screen: pygame.Surface, state: dict) -> None:
+        mr = max(3, int(7 * self._scale))
         for p in state["pieces"]:
             if p["state"] not in ("preparation", "moving"):
                 continue
             if p["type"] == "ghost":
                 continue
-            cx, cy = board_to_px(p["dest_x"], p["dest_y"])
-            pygame.draw.circle(screen, C_DEST_MARKER, (cx, cy), 7)
+            cx, cy = self.board_to_px(p["dest_x"], p["dest_y"])
+            pygame.draw.circle(screen, C_DEST_MARKER, (cx, cy), mr)
             border = C_BLACK_BORDER if p["owner"] == "white" else C_WHITE_BORDER
-            pygame.draw.circle(screen, border, (cx, cy), 7, 2)
+            pygame.draw.circle(screen, border, (cx, cy), mr, max(1, mr // 4))
 
     # ------------------------------------------------------------------
     # Pieces
@@ -237,80 +300,75 @@ class Renderer:
 
     def _draw_pieces(self, screen: pygame.Surface, state: dict,
                      selected_id: str | None) -> None:
+        sel_ring = self._piece_r + max(2, int(5 * self._scale))
         for p in state["pieces"]:
-            cx, cy = board_to_px(p["x"], p["y"])
+            cx, cy = self.board_to_px(p["x"], p["y"])
 
             if p["type"] == "ghost":
                 self._draw_ghost(screen, cx, cy)
                 continue
 
-            fill, border = self._piece_colors(p)
-            is_selected = (p["id"] == selected_id)
+            fill, border = (C_WHITE_FILL, C_BLACK_BORDER) if p["owner"] == "white" \
+                           else (C_BLACK_FILL, C_WHITE_BORDER)
 
-            # Selection ring (drawn first, behind piece)
-            if is_selected:
-                pygame.draw.circle(screen, C_SELECT, (cx, cy), PIECE_R + 5)
+            if p["id"] == selected_id:
+                pygame.draw.circle(screen, C_SELECT, (cx, cy), sel_ring)
 
-            # Body
-            pygame.draw.circle(screen, fill, (cx, cy), PIECE_R)
-            pygame.draw.circle(screen, border, (cx, cy), PIECE_R, 2)
+            pygame.draw.circle(screen, fill,   (cx, cy), self._piece_r)
+            pygame.draw.circle(screen, border, (cx, cy), self._piece_r, 2)
 
-            # Label
-            label = LABELS.get(p["type"], "?")
-            t = self._font_piece.render(label, True, border)
+            t = self._font_piece.render(LABELS.get(p["type"], "?"), True, border)
             screen.blit(t, (cx - t.get_width() // 2, cy - t.get_height() // 2))
 
-            # Cooldown: dim overlay
             if p["state"] == "cooldown":
-                s = pygame.Surface((PIECE_R * 2, PIECE_R * 2), pygame.SRCALPHA)
-                pygame.draw.circle(s, (0, 0, 0, 100), (PIECE_R, PIECE_R), PIECE_R)
-                screen.blit(s, (cx - PIECE_R, cy - PIECE_R))
-
-    def _piece_colors(self, p: dict) -> tuple[tuple, tuple]:
-        if p["owner"] == "white":
-            return C_WHITE_FILL, C_BLACK_BORDER
-        else:
-            return C_BLACK_FILL, C_WHITE_BORDER
+                s = pygame.Surface((self._piece_r * 2, self._piece_r * 2), pygame.SRCALPHA)
+                pygame.draw.circle(s, (0, 0, 0, 100),
+                                   (self._piece_r, self._piece_r), self._piece_r)
+                screen.blit(s, (cx - self._piece_r, cy - self._piece_r))
 
     def _draw_ghost(self, screen: pygame.Surface, cx: int, cy: int) -> None:
-        s = pygame.Surface((PIECE_R * 2, PIECE_R * 2), pygame.SRCALPHA)
-        pygame.draw.circle(s, (*C_GHOST_FILL, 110), (PIECE_R, PIECE_R), PIECE_R)
-        pygame.draw.circle(s, (*C_GHOST_FILL, 200), (PIECE_R, PIECE_R), PIECE_R, 2)
-        screen.blit(s, (cx - PIECE_R, cy - PIECE_R))
+        r = self._piece_r
+        s = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+        pygame.draw.circle(s, (*C_GHOST_FILL, 110), (r, r), r)
+        pygame.draw.circle(s, (*C_GHOST_FILL, 200), (r, r), r, 2)
+        screen.blit(s, (cx - r, cy - r))
 
     # ------------------------------------------------------------------
     # Mana bars
     # ------------------------------------------------------------------
 
     def _draw_mana_bars(self, screen: pygame.Surface, state: dict) -> None:
-        mana    = state.get("mana", {})
-        max_mana = state.get("max_mana", MANA_MAX)
-        bar_w   = 8 * SQ
+        mana     = state.get("mana", {})
+        max_mana = state.get("max_mana", 10.0)
+        bar_w    = 8 * self._sq
+        mh       = self._mana_h
+        gap      = max(2, int(6 * self._scale))
 
         self._draw_one_mana(screen, mana.get("black", 0.0), "black",
-                             BOARD_X, BOARD_Y - MANA_H - 6, bar_w, max_mana)
+                             self._board_x, self._board_y - mh - gap,
+                             bar_w, max_mana, mh)
         self._draw_one_mana(screen, mana.get("white", 0.0), "white",
-                             BOARD_X, BOARD_Y + 8 * SQ + 6, bar_w, max_mana)
+                             self._board_x, self._board_y + 8 * self._sq + gap,
+                             bar_w, max_mana, mh)
 
     def _draw_one_mana(self, screen: pygame.Surface, value: float,
                         owner: str, x: int, y: int, w: int,
-                        max_mana: float) -> None:
-        fill_w = int(w * max(0.0, value) / max_mana)
+                        max_mana: float, mh: int) -> None:
+        fill_w    = int(w * max(0.0, value) / max_mana)
         bar_color = C_MANA_BLACK if owner == "black" else C_MANA_WHITE
-        pygame.draw.rect(screen, C_MANA_BG, (x, y, w, MANA_H))
-        pygame.draw.rect(screen, bar_color, (x, y, fill_w, MANA_H))
-        pygame.draw.rect(screen, C_TEXT, (x, y, w, MANA_H), 1)
-        lbl = self._font_ui.render(f"{owner.capitalize()}  {value:.1f} / {max_mana:.0f}",
-                                    True, C_TEXT)
-        screen.blit(lbl, (x + 4, y + MANA_H // 2 - lbl.get_height() // 2))
+        pygame.draw.rect(screen, C_MANA_BG,   (x, y, w, mh))
+        pygame.draw.rect(screen, bar_color,    (x, y, fill_w, mh))
+        pygame.draw.rect(screen, C_TEXT,       (x, y, w, mh), 1)
+        lbl = self._font_ui.render(
+            f"{owner.capitalize()}  {value:.1f} / {max_mana:.0f}", True, C_TEXT)
+        screen.blit(lbl, (x + self._gap, y + mh // 2 - lbl.get_height() // 2))
 
     # ------------------------------------------------------------------
     # Game over overlay
     # ------------------------------------------------------------------
 
-    def _draw_game_over(self, screen: pygame.Surface,
-                         winner: str | None) -> None:
-        overlay = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
+    def _draw_game_over(self, screen: pygame.Surface, winner: str | None) -> None:
+        overlay = pygame.Surface((self._win_w, self._win_h), pygame.SRCALPHA)
         overlay.fill(C_OVERLAY)
         screen.blit(overlay, (0, 0))
 
@@ -322,9 +380,9 @@ class Renderer:
             msg = "Game Over"
 
         t = self._font_big.render(msg, True, C_WIN_TEXT)
-        screen.blit(t, (WIN_W // 2 - t.get_width() // 2,
-                        WIN_H // 2 - t.get_height() // 2))
+        screen.blit(t, (self._win_w // 2 - t.get_width() // 2,
+                        self._win_h // 2 - t.get_height() // 2))
 
         sub = self._font_ui.render("Press Escape to return to menu", True, C_TEXT)
-        screen.blit(sub, (WIN_W // 2 - sub.get_width() // 2,
-                           WIN_H // 2 + t.get_height()))
+        screen.blit(sub, (self._win_w // 2 - sub.get_width() // 2,
+                           self._win_h // 2 + t.get_height()))
