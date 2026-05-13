@@ -50,13 +50,23 @@ DEFAULTS: dict = {
     "diameter_piece":        0.6,
 }
 
-# Display-only settings (client-side, not sent to server)
+# Client-side numeric params (not sent to server)
+_CLIENT_PARAMS = [
+    ("Snap margin", "snap_margin", 0.05, 2.0, 0.05),
+]
+
+CLIENT_DEFAULTS: dict = {
+    "snap_margin": 0.625,
+}
+
+# Display-only toggle settings (client-side, not sent to server)
 _DISPLAY = [
     ("Own timers",  "show_own_timers"),
     ("Opp timers",  "show_opp_timers"),
 ]
 
 DISPLAY_DEFAULTS: dict = {
+    **CLIENT_DEFAULTS,
     "show_own_timers": True,
     "show_opp_timers": True,
 }
@@ -148,13 +158,18 @@ def _make_layout(win_w: int, win_h: int) -> dict:
 
 _MAX_SERVERS = 4  # max rows shown in join mode
 
-def _display_top_y(L: dict, mode: str) -> int:
-    """Y position of the first display-toggle row."""
+def _client_params_top_y(L: dict, mode: str) -> int:
+    """Y position of the first client-param row."""
     if mode == "join":
         base = L['s'](44) + _MAX_SERVERS * L['s'](36) + L['s'](8)
     else:
         base = len(_PARAMS) * L['row_h'] + L['s'](8)
     return L['body_y'] + base
+
+
+def _display_top_y(L: dict, mode: str) -> int:
+    """Y position of the first display-toggle row."""
+    return _client_params_top_y(L, mode) + len(_CLIENT_PARAMS) * L['row_h'] + L['s'](8)
 
 
 def _port_y(L: dict, mode: str) -> int:
@@ -320,7 +335,9 @@ def run_menu(screen: pygame.Surface) -> dict:
                         key = action[len("toggle_"):]
                         display_vals[key] = not display_vals.get(key, True)
                     elif action and action[0] in "+-":
-                        _adjust(vals, action[1:], 1 if action[0] == "+" else -1)
+                        direction = 1 if action[0] == "+" else -1
+                        _adjust(vals, action[1:], direction)
+                        _adjust_client(display_vals, action[1:], direction)
 
         _draw(screen, fonts, mode, vals, display_vals, ip, port, focused, mx, my, L,
               servers, scanning)
@@ -359,6 +376,20 @@ def _click(mx: int, my: int, mode: str, L: dict,
             if pygame.Rect(plus_x,  ry + off, btn_w, btn_h).collidepoint(mx, my):
                 return f"+{key}"
 
+    cpt_y   = _client_params_top_y(L, mode)
+    row_h   = L['row_h']
+    btn_w   = L['btn_w']
+    btn_h   = L['btn_h']
+    minus_x = L['minus_x']
+    plus_x  = L['plus_x']
+    for idx, (_, key, *_rest) in enumerate(_CLIENT_PARAMS):
+        ry  = cpt_y + idx * row_h
+        off = (row_h - btn_h) // 2
+        if pygame.Rect(minus_x, ry + off, btn_w, btn_h).collidepoint(mx, my):
+            return f"-{key}"
+        if pygame.Rect(plus_x,  ry + off, btn_w, btn_h).collidepoint(mx, my):
+            return f"+{key}"
+
     for idx, (_, key) in enumerate(_DISPLAY):
         if _toggle_rect(L, mode, idx).collidepoint(mx, my):
             return f"toggle_{key}"
@@ -372,6 +403,13 @@ def _click(mx: int, my: int, mode: str, L: dict,
 
 def _adjust(vals: dict, key: str, direction: int) -> None:
     for _, k, lo, hi, step in _PARAMS:
+        if k == key:
+            vals[k] = round(max(lo, min(hi, vals[k] + direction * step)), 6)
+            return
+
+
+def _adjust_client(vals: dict, key: str, direction: int) -> None:
+    for _, k, lo, hi, step in _CLIENT_PARAMS:
         if k == key:
             vals[k] = round(max(lo, min(hi, vals[k] + direction * step)), 6)
             return
@@ -458,12 +496,37 @@ def _draw(screen, fonts, mode, vals, display_vals, ip, port, focused, mx, my, L:
             t  = fonts['med'].render(sv, True, _C_TEXT)
             screen.blit(t, (val_x - t.get_width() // 2, cy - t.get_height() // 2))
 
-    # Display-toggle section
+    # Client params section (all modes)
     row_h   = L['row_h']
+    btn_w   = L['btn_w']
     btn_h   = L['btn_h']
-    disp_y  = _display_top_y(L, mode)
+    minus_x = L['minus_x']
+    plus_x  = L['plus_x']
+    val_x   = L['val_x']
+    cpt_y   = _client_params_top_y(L, mode)
     sep_x1  = L['off_x'] + L['s'](80)
     sep_x2  = L['win_w'] - sep_x1
+    pygame.draw.line(screen, _C_SEP,
+                     (sep_x1, cpt_y - L['s'](6)), (sep_x2, cpt_y - L['s'](6)))
+    for idx, (label, key, _lo, _hi, step) in enumerate(_CLIENT_PARAMS):
+        ry  = cpt_y + idx * row_h
+        cy2 = ry + row_h // 2
+        off = (row_h - btn_h) // 2
+        t = fonts['sml'].render(label, True, _C_TEXT)
+        screen.blit(t, (label_x, cy2 - t.get_height() // 2))
+        for bx_btn, lbl in ((minus_x, "−"), (plus_x, "+")):
+            r   = pygame.Rect(bx_btn, ry + off, btn_w, btn_h)
+            col = _C_BTN_H if r.collidepoint(mx, my) else _C_BTN
+            pygame.draw.rect(screen, col, r, border_radius=4)
+            t = fonts['med'].render(lbl, True, _C_TEXT)
+            screen.blit(t, (r.centerx - t.get_width() // 2,
+                            r.centery - t.get_height() // 2))
+        sv = _fmt(display_vals.get(key, CLIENT_DEFAULTS.get(key, 0.0)), step)
+        t  = fonts['med'].render(sv, True, _C_TEXT)
+        screen.blit(t, (val_x - t.get_width() // 2, cy2 - t.get_height() // 2))
+
+    # Display-toggle section
+    disp_y  = _display_top_y(L, mode)
     pygame.draw.line(screen, _C_SEP,
                      (sep_x1, disp_y - L['s'](6)), (sep_x2, disp_y - L['s'](6)))
     for idx, (label, key) in enumerate(_DISPLAY):

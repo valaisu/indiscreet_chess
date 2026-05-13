@@ -105,7 +105,8 @@ _SQRT2 = math.sqrt(2.0)
 
 
 def _snap_destination(bx: float, by: float, piece: dict,
-                      freedom_deg: float) -> tuple[float, float]:
+                      freedom_deg: float,
+                      pieces: list[dict] | None = None) -> tuple[tuple[float, float], float]:
     """
     Return the nearest point in the piece's legal movement area to (bx, by).
     Legal area is a union of sectors: each direction has a cone of ±freedom_deg.
@@ -120,7 +121,7 @@ def _snap_destination(bx: float, by: float, piece: dict,
     click_dy = by - py
     click_r  = math.hypot(click_dx, click_dy)
     if click_r < 1e-9:
-        return (px, py)
+        return (px, py), float("inf")
     nx, ny      = click_dx / click_r, click_dy / click_r
     click_angle = math.atan2(click_dy, click_dx)
     freedom_rad = math.radians(freedom_deg)
@@ -162,12 +163,18 @@ def _snap_destination(bx: float, by: float, piece: dict,
             best_d, best_pt = d, (cx, cy)
 
     if ptype == "knight":
+        landing_r = math.sqrt(5.0) * math.tan(freedom_rad)
         for adx, ady in [(2,1),(2,-1),(-2,1),(-2,-1),(1,2),(1,-2),(-1,2),(-1,-2)]:
             x, y = px + adx, py + ady
             if 0.0 < x < 8.0 and 0.0 < y < 8.0:
                 d = math.hypot(bx - x, by - y)
-                if d < best_d:
-                    best_d, best_pt = d, (x, y)
+                if d <= landing_r:
+                    return (bx, by), 0.0  # inside circle: use click position
+                edge_d = d - landing_r   # distance from click to nearest circle edge
+                if edge_d < best_d:
+                    best_d = edge_d
+                    best_pt = (x + (bx - x) / d * landing_r,
+                               y + (by - y) / d * landing_r)
 
     elif ptype == "pawn":
         fwd     = -1.0 if owner == "white" else 1.0
@@ -175,8 +182,24 @@ def _snap_destination(bx: float, by: float, piece: dict,
         try_sector(0.0, fwd, min(max_fwd, board_max(0.0, fwd)))
         d_unit = 1.0 / _SQRT2
         for xdir in (-1.0, 1.0):
-            dx, dy = xdir * d_unit, fwd * d_unit
-            try_sector(dx, dy, min(_SQRT2, board_max(dx, dy)))
+            dx_d, dy_d = xdir * d_unit, fwd * d_unit
+            enemy_found = False
+            if pieces is not None:
+                for other in pieces:
+                    if other.get("owner") == owner:
+                        continue
+                    ex, ey = other["x"] - px, other["y"] - py
+                    dist_e = math.hypot(ex, ey)
+                    if dist_e < 1e-9 or dist_e > _SQRT2 * 1.5:
+                        continue
+                    dot = (ex * dx_d + ey * dy_d) / dist_e
+                    if math.acos(max(-1.0, min(1.0, dot))) <= freedom_rad:
+                        enemy_found = True
+                        d = math.hypot(bx - other["x"], by - other["y"])
+                        if d < best_d:
+                            best_d, best_pt = d, (other["x"], other["y"])
+            if not enemy_found:
+                try_sector(dx_d, dy_d, min(_SQRT2, board_max(dx_d, dy_d)))
 
     elif ptype == "king":
         hor_max = 2.0 if not piece.get("has_moved") else 1.0
@@ -221,7 +244,8 @@ def _handle_click(mouse_pos: tuple[int, int],
                   send_q: queue.Queue,
                   player_color: str,
                   solo: bool,
-                  renderer: Renderer) -> str | None:
+                  renderer: Renderer,
+                  snap_max: float = _MOVE_SNAP_MAX) -> str | None:
     bx, by = renderer.px_to_board(*mouse_pos)
     if not (0 <= bx < 8 and 0 <= by < 8):
         return selected_id
@@ -249,8 +273,8 @@ def _handle_click(mouse_pos: tuple[int, int],
 
         if sel:
             freedom = state.get("freedom_deg", 5.0)
-            (dest_x, dest_y), snap_d = _snap_destination(bx, by, sel, freedom)
-            if snap_d > _MOVE_SNAP_MAX:
+            (dest_x, dest_y), snap_d = _snap_destination(bx, by, sel, freedom, pieces)
+            if snap_d > snap_max:
                 return selected_id  # click too far from any valid destination
             send_q.put({
                 "type": QUEUE_MOVE,
@@ -270,6 +294,7 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
     solo         = config["mode"] == "solo"
     player_color = "white" if config["mode"] != "join" else "black"
     url          = f"ws://{config['host_ip']}:{config['port']}"
+    snap_max     = config.get("display", {}).get("snap_margin", _MOVE_SNAP_MAX)
 
     recv_q: queue.Queue = queue.Queue()
     send_q: queue.Queue = queue.Queue()
@@ -319,7 +344,7 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
                     elif last_state and not last_state.get("game_over"):
                         selected_id = _handle_click(
                             event.pos, last_state, selected_id,
-                            send_q, player_color, solo, renderer,
+                            send_q, player_color, solo, renderer, snap_max,
                         )
                 if event.button == 3:
                     selected_id = None
