@@ -191,6 +191,8 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_F11:
                     pygame.display.toggle_fullscreen()
+                elif event.key == pygame.K_f:
+                    renderer.toggle_flip()
                 elif event.key == pygame.K_ESCAPE:
                     if last_state and last_state.get("game_over"):
                         return

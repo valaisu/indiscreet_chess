@@ -177,7 +177,8 @@ def _draw_fs_icon(screen: pygame.Surface, r: pygame.Rect, is_fs: bool) -> None:
 class Renderer:
     def __init__(self, player_color: str | None, display: dict | None = None):
         self.player_color = player_color
-        self._display = display or {}
+        self._display  = display or {}
+        self._flipped  = (player_color == "black")
         self._scale   = 1.0
         self._win_w   = WIN_W
         self._win_h   = WIN_H
@@ -218,13 +219,28 @@ class Renderer:
     # Coordinate helpers
     # ------------------------------------------------------------------
 
+    def toggle_flip(self) -> None:
+        self._flipped = not self._flipped
+
     def board_to_px(self, bx: float, by: float) -> tuple[int, int]:
+        if self._flipped:
+            return (int(self._board_x + (8.0 - bx) * self._sq),
+                    int(self._board_y + (8.0 - by) * self._sq))
         return (int(self._board_x + bx * self._sq),
                 int(self._board_y + by * self._sq))
 
     def px_to_board(self, px: int, py: int) -> tuple[float, float]:
+        if self._flipped:
+            return (8.0 - (px - self._board_x) / self._sq,
+                    8.0 - (py - self._board_y) / self._sq)
         return ((px - self._board_x) / self._sq,
                 (py - self._board_y) / self._sq)
+
+    def _board_dir_to_angle(self, lx: float, ly: float) -> float:
+        """Board-space direction → screen angle, corrected for board flip."""
+        if self._flipped:
+            return math.atan2(-ly, -lx)
+        return math.atan2(ly, lx)
 
     # ------------------------------------------------------------------
     # Public entry points
@@ -287,13 +303,13 @@ class Renderer:
         elif ptype == "pawn":
             fwd     = -1.0 if owner == "white" else 1.0
             max_fwd = 1.0  if piece.get("has_moved") else 2.0
-            _wedge_mana(surf, cx, cy, math.atan2(fwd, 0.0), fr, max_fwd * self._sq, mana_r)
+            _wedge_mana(surf, cx, cy, self._board_dir_to_angle(0.0, fwd), fr, max_fwd * self._sq, mana_r)
             for xdir in (1.0, -1.0):
                 lx_d = xdir / _SQRT2
                 ly_d = fwd  / _SQRT2
                 has_target = _has_enemy_near(bx, by, owner, lx_d, ly_d,
                                              _SQRT2 + 0.5, state["pieces"])
-                a      = math.atan2(ly_d, lx_d)
+                a      = self._board_dir_to_angle(lx_d, ly_d)
                 full_r = _SQRT2 * self._sq
                 if not has_target:
                     _wedge(surf, cx, cy, a, fr, full_r, C_HINT_ILLEGAL)
@@ -305,13 +321,13 @@ class Renderer:
             for lx, ly in _ALL8:
                 cap = (2.0 if (ly == 0.0 and unmoved)
                        else (1.0 if (lx == 0.0 or ly == 0.0) else _SQRT2))
-                _wedge_mana(surf, cx, cy, math.atan2(ly, lx), fr, cap * self._sq, mana_r)
+                _wedge_mana(surf, cx, cy, self._board_dir_to_angle(lx, ly), fr, cap * self._sq, mana_r)
 
         else:
             dirs = {"rook": _ORTHO, "bishop": _DIAG, "queen": _ALL8}.get(ptype, [])
             for lx, ly in dirs:
                 full_r = _max_to_edge(bx, by, lx, ly) * self._sq
-                _wedge_mana(surf, cx, cy, math.atan2(ly, lx), fr, full_r, mana_r)
+                _wedge_mana(surf, cx, cy, self._board_dir_to_angle(lx, ly), fr, full_r, mana_r)
 
         screen.blit(surf, (0, 0))
 
@@ -328,10 +344,12 @@ class Renderer:
                 color = C_LIGHT if (row + col) % 2 == 0 else C_DARK
                 pygame.draw.rect(screen, color, (bx + col * sq, by + row * sq, sq, sq))
         for i in range(8):
-            lbl = self._font_ui.render("abcdefgh"[i], True, C_TEXT)
+            col_ch  = "abcdefgh"[7 - i] if self._flipped else "abcdefgh"[i]
+            row_str = str(i + 1)        if self._flipped else str(8 - i)
+            lbl = self._font_ui.render(col_ch, True, C_TEXT)
             screen.blit(lbl, (bx + i * sq + sq // 2 - lbl.get_width() // 2,
                                by + 8 * sq + self._gap))
-            lbl = self._font_ui.render(str(8 - i), True, C_TEXT)
+            lbl = self._font_ui.render(row_str, True, C_TEXT)
             screen.blit(lbl, (bx - lbl.get_width() - self._gap,
                                by + i * sq + sq // 2 - lbl.get_height() // 2))
         pygame.draw.rect(screen, C_BOARD_BORDER, (bx, by, 8 * sq, 8 * sq),
