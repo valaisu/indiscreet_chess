@@ -97,7 +97,7 @@ def _spawn_server(config: dict) -> subprocess.Popen:
 # Input helpers
 # ---------------------------------------------------------------------------
 
-_CLICK_R_BOARD = 0.35   # click radius in board units (PIECE_R/SQ + 0.05, scale-independent)
+_CLICK_R_BOARD = 0.5    # click radius in board units — half a square, scale-independent
 
 
 def _find_piece_at(bx: float, by: float,
