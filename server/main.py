@@ -10,6 +10,7 @@ Run from the project root:
 import argparse
 import asyncio
 import json
+import socket
 import sys
 
 import websockets
@@ -100,6 +101,46 @@ class Server:
         print(f"[server] Game over. Winner: {self.game.winner}")
 
 
+class DiscoveryProtocol(asyncio.DatagramProtocol):
+    def __init__(self, ws_port: int, server: "Server") -> None:
+        self._ws_port = ws_port
+        self._server  = server
+        self._transport = None
+
+    def connection_made(self, transport) -> None:
+        self._transport = transport
+
+    def datagram_received(self, data: bytes, addr) -> None:
+        try:
+            msg = json.loads(data)
+        except Exception:
+            return
+        if msg.get("type") != protocol.DISCOVER:
+            return
+        waiting = not self._server._ready.is_set()
+        reply = json.dumps({
+            "type":    protocol.ANNOUNCE,
+            "port":    self._ws_port,
+            "name":    socket.gethostname(),
+            "waiting": waiting,
+        }).encode()
+        self._transport.sendto(reply, addr)
+
+
+async def _run_discovery(ws_port: int, server: "Server") -> None:
+    loop = asyncio.get_running_loop()
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("", protocol.DISCOVERY_PORT))
+    sock.setblocking(False)
+    await loop.create_datagram_endpoint(
+        lambda: DiscoveryProtocol(ws_port, server),
+        sock=sock,
+    )
+    print(f"[server] Discovery listening on UDP :{protocol.DISCOVERY_PORT}")
+    await asyncio.Event().wait()
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Indiscreet Chess server")
     parser.add_argument("--solo",        action="store_true")
@@ -131,7 +172,9 @@ async def main() -> None:
           f"({'solo' if args.solo else 'multiplayer'})")
 
     async with websockets.serve(server.handle_client, args.host, args.port):
-        await server.run_game()
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(server.run_game())
+            tg.create_task(_run_discovery(args.port, server))
 
 
 if __name__ == "__main__":
