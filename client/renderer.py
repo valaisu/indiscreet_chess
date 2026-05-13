@@ -155,13 +155,14 @@ class Renderer:
         bx, by = piece["x"], piece["y"]
         cx, cy = board_to_px(bx, by)
         ptype  = piece["type"]
+        fr     = math.radians(state.get("freedom_deg", 5.0))
 
         surf = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
         surf.set_clip(pygame.Rect(BOARD_X, BOARD_Y, 8 * SQ, 8 * SQ))
 
         if ptype == "knight":
             s = 1.0
-            r_px = max(4, int(math.sqrt(5.0) * s * math.tan(_FREEDOM_RAD) * SQ))
+            r_px = max(4, int(math.sqrt(5.0) * s * math.tan(fr) * SQ))
             for a, b in [(2,1),(2,-1),(-2,1),(-2,-1),(1,2),(1,-2),(-1,2),(-1,-2)]:
                 tx, ty = bx + a * s, by + b * s
                 if 0 <= tx <= 8 and 0 <= ty <= 8:
@@ -171,11 +172,10 @@ class Renderer:
         elif ptype == "pawn":
             fwd = -1.0 if piece["owner"] == "white" else 1.0
             max_fwd = 1.0 if piece.get("has_moved") else 2.0
-            _wedge(surf, cx, cy, math.atan2(fwd, 0.0), _FREEDOM_RAD,
-                   max_fwd * SQ)
+            _wedge(surf, cx, cy, math.atan2(fwd, 0.0), fr, max_fwd * SQ)
             for xdir in (1.0, -1.0):
                 a = math.atan2(fwd / _SQRT2, xdir / _SQRT2)
-                _wedge(surf, cx, cy, a, _FREEDOM_RAD, _SQRT2 * SQ)
+                _wedge(surf, cx, cy, a, fr, _SQRT2 * SQ)
 
         elif ptype == "king":
             unmoved = not piece.get("has_moved", False)
@@ -183,14 +183,13 @@ class Renderer:
                 is_horiz = (ly == 0.0)
                 cap = (2.0 if (is_horiz and unmoved)
                        else (1.0 if (lx == 0.0 or ly == 0.0) else _SQRT2))
-                _wedge(surf, cx, cy, math.atan2(ly, lx), _FREEDOM_RAD,
-                       cap * SQ)
+                _wedge(surf, cx, cy, math.atan2(ly, lx), fr, cap * SQ)
 
         else:
             dirs = {"rook": _ORTHO, "bishop": _DIAG, "queen": _ALL8}.get(ptype, [])
             for lx, ly in dirs:
                 r = _max_to_edge(bx, by, lx, ly) * SQ
-                _wedge(surf, cx, cy, math.atan2(ly, lx), _FREEDOM_RAD, r)
+                _wedge(surf, cx, cy, math.atan2(ly, lx), fr, r)
 
         screen.blit(surf, (0, 0))
 
@@ -326,6 +325,6 @@ class Renderer:
         screen.blit(t, (WIN_W // 2 - t.get_width() // 2,
                         WIN_H // 2 - t.get_height() // 2))
 
-        sub = self._font_ui.render("Press Escape to quit", True, C_TEXT)
+        sub = self._font_ui.render("Press Escape to return to menu", True, C_TEXT)
         screen.blit(sub, (WIN_W // 2 - sub.get_width() // 2,
                            WIN_H // 2 + t.get_height()))

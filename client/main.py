@@ -189,9 +189,11 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     if last_state and last_state.get("game_over"):
-                        pygame.quit()
-                        sys.exit()
-                    selected_id = None
+                        return
+                    elif selected_id is not None:
+                        selected_id = None
+                    else:
+                        return
 
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1 and last_state and not last_state.get("game_over"):
@@ -234,19 +236,20 @@ def main() -> None:
     screen = pygame.display.set_mode((WIN_W, WIN_H))
     pygame.display.set_caption("Indiscreet Chess")
 
-    config = run_menu(screen)
+    while True:
+        config = run_menu(screen)
 
-    server_proc = None
-    if config["mode"] in ("solo", "host"):
-        server_proc = _spawn_server(config)
-        time.sleep(0.5)   # give server time to bind
+        server_proc = None
+        if config["mode"] in ("solo", "host"):
+            server_proc = _spawn_server(config)
+            time.sleep(0.5)   # give server time to bind
 
-    try:
-        _game_loop(screen, config)
-    finally:
-        if server_proc:
-            server_proc.terminate()
-            server_proc.wait()
+        try:
+            _game_loop(screen, config)
+        finally:
+            if server_proc:
+                server_proc.terminate()
+                server_proc.wait()
 
 
 if __name__ == "__main__":
