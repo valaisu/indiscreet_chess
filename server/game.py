@@ -354,8 +354,10 @@ class GameState:
             "tick": self.tick,
             "pieces": [p.to_dict() for p in self.pieces],
             "mana": {k: round(v, 3) for k, v in self.mana.items()},
-            "max_mana":   params.MAXIMUM_MANA,
+            "max_mana":    params.MAXIMUM_MANA,
             "freedom_deg": params.MOVEMENT_FREEDOM_DEG,
+            "prep_period": params.PREPARATION_PERIOD,
+            "cooldown":    params.COOLDOWN,
             "game_over": self.game_over,
             "winner": self.winner,
         }

@@ -51,6 +51,8 @@ C_MANA_BLACK   = (180,  60,  60)
 
 C_TEXT         = (220, 220, 220)
 C_OVERLAY      = (  0,   0,   0, 160)
+C_TIMER_PREP   = (220, 185,  50)   # gold  — preparation arc
+C_TIMER_COOL   = ( 70, 160, 220)   # blue  — cooldown arc
 C_WIN_TEXT     = (255, 220, 100)
 C_HINT_OK      = (100, 210, 100,  80)  # affordable + legal
 C_HINT_NO_MANA = (220, 140,  40,  80)  # legal direction, not enough mana
@@ -167,8 +169,9 @@ def _draw_fs_icon(screen: pygame.Surface, r: pygame.Rect, is_fs: bool) -> None:
 # ---------------------------------------------------------------------------
 
 class Renderer:
-    def __init__(self, player_color: str | None):
+    def __init__(self, player_color: str | None, display: dict | None = None):
         self.player_color = player_color
+        self._display = display or {}
         self._scale   = 1.0
         self._win_w   = WIN_W
         self._win_h   = WIN_H
@@ -350,7 +353,10 @@ class Renderer:
 
     def _draw_pieces(self, screen: pygame.Surface, state: dict,
                      selected_id: str | None) -> None:
-        sel_ring = self._piece_r + max(2, int(5 * self._scale))
+        prep_total = state.get("prep_period", 0.5)
+        cool_total = state.get("cooldown",    0.8)
+        sel_ring   = self._piece_r + max(2, int(5 * self._scale))
+
         for p in state["pieces"]:
             cx, cy = self.board_to_px(p["x"], p["y"])
 
@@ -375,6 +381,37 @@ class Renderer:
                 pygame.draw.circle(s, (0, 0, 0, 100),
                                    (self._piece_r, self._piece_r), self._piece_r)
                 screen.blit(s, (cx - self._piece_r, cy - self._piece_r))
+
+            is_own  = (self.player_color is None or p["owner"] == self.player_color)
+            show    = (is_own     and self._display.get("show_own_timers")) or \
+                      (not is_own and self._display.get("show_opp_timers"))
+            if show:
+                timer = p.get("state_timer", 0.0)
+                if p["state"] == "preparation" and prep_total > 0:
+                    self._draw_timer_arc(screen, cx, cy,
+                                         1.0 - timer / prep_total, C_TIMER_PREP)
+                elif p["state"] == "cooldown" and cool_total > 0:
+                    self._draw_timer_arc(screen, cx, cy,
+                                         1.0 - timer / cool_total, C_TIMER_COOL)
+
+    def _draw_timer_arc(self, screen: pygame.Surface, cx: int, cy: int,
+                        fraction: float, color: tuple) -> None:
+        """Clockwise ring-arc from 12 o'clock filling to `fraction` of full circle."""
+        if fraction <= 0:
+            return
+        fraction = min(1.0, fraction)
+        r_out = self._piece_r + max(3, int(5 * self._scale))
+        r_in  = self._piece_r + max(1, int(2 * self._scale))
+        n     = max(4, int(48 * fraction))
+        start = -math.pi / 2
+        sweep = fraction * 2 * math.pi
+        outer, inner = [], []
+        for i in range(n + 1):
+            a = start + sweep * i / n
+            ca, sa = math.cos(a), math.sin(a)
+            outer.append((cx + ca * r_out, cy + sa * r_out))
+            inner.append((cx + ca * r_in,  cy + sa * r_in))
+        pygame.draw.polygon(screen, color, outer + inner[::-1])
 
     def _draw_ghost(self, screen: pygame.Surface, cx: int, cy: int) -> None:
         r = self._piece_r

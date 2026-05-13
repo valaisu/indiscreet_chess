@@ -174,7 +174,8 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
     pygame.display.set_caption("Indiscreet Chess")
     clock = pygame.time.Clock()
 
-    renderer        = Renderer(player_color=None if solo else player_color)
+    renderer        = Renderer(player_color=None if solo else player_color,
+                               display=config.get("display", {}))
     last_state: dict | None = None
     last_state_time: float  = 0.0
     selected_id: str | None = None
