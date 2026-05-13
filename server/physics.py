@@ -62,6 +62,8 @@ def _knight_burst(knight: Piece, pieces: list[Piece], to_remove: set) -> None:
     for other in pieces:
         if other is knight or id(other) in to_remove:
             continue
+        if other.type == PieceType.GHOST:
+            continue
         dist = math.hypot(other.x - knight.x, other.y - knight.y)
         if dist <= knight.radius + other.radius:
             to_remove.add(id(other))
