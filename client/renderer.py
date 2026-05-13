@@ -52,7 +52,13 @@ C_MANA_BLACK   = (180,  60,  60)
 C_TEXT         = (220, 220, 220)
 C_OVERLAY      = (  0,   0,   0, 160)
 C_WIN_TEXT     = (255, 220, 100)
-C_HINT         = (100, 210, 100,  45)
+C_HINT_OK      = (100, 210, 100,  80)  # affordable + legal
+C_HINT_NO_MANA = (220, 140,  40,  80)  # legal direction, not enough mana
+C_HINT_ILLEGAL = (180,  60,  60,  80)  # move not currently legal
+
+# Mirrors server/params.py — used to shade hints by mana affordability
+_BASE_MOVE_COST = 1.0
+_DISTANCE_COST  = 0.2
 
 _SQRT2 = math.sqrt(2.0)
 _ORTHO = [(1, 0), (-1, 0), (0, 1), (0, -1)]
@@ -71,14 +77,45 @@ def _max_to_edge(bx: float, by: float, lx: float, ly: float) -> float:
 
 
 def _wedge(surf: pygame.Surface, cx: float, cy: float,
-           angle: float, half: float, r: float, n: int = 12) -> None:
+           angle: float, half: float, r: float,
+           color: tuple, n: int = 12) -> None:
     if r < 1:
         return
     pts = [(cx, cy)]
     for i in range(n + 1):
         a = angle - half + 2 * half * i / n
         pts.append((cx + math.cos(a) * r, cy + math.sin(a) * r))
-    pygame.draw.polygon(surf, C_HINT, pts)
+    pygame.draw.polygon(surf, color, pts)
+
+
+def _wedge_mana(surf: pygame.Surface, cx: float, cy: float,
+                angle: float, half: float, full_r: float, mana_r: float) -> None:
+    """Draw wedge colored green up to mana range, orange beyond."""
+    if mana_r >= full_r:
+        _wedge(surf, cx, cy, angle, half, full_r, C_HINT_OK)
+    elif mana_r <= 0:
+        _wedge(surf, cx, cy, angle, half, full_r, C_HINT_NO_MANA)
+    else:
+        _wedge(surf, cx, cy, angle, half, full_r, C_HINT_NO_MANA)
+        _wedge(surf, cx, cy, angle, half, mana_r, C_HINT_OK)
+
+
+def _has_enemy_near(bx: float, by: float, owner: str,
+                    lx: float, ly: float, max_dist: float,
+                    pieces: list) -> bool:
+    """True if an enemy piece lies within max_dist in the (lx, ly) direction."""
+    check_angle = math.radians(20)
+    for p in pieces:
+        if p["owner"] == owner:
+            continue
+        dx, dy = p["x"] - bx, p["y"] - by
+        dist = math.hypot(dx, dy)
+        if dist < 1e-6 or dist > max_dist:
+            continue
+        dot = (dx * lx + dy * ly) / dist
+        if math.acos(max(-1.0, min(1.0, dot))) <= check_angle:
+            return True
+    return False
 
 # ---------------------------------------------------------------------------
 # Piece labels
@@ -216,10 +253,14 @@ class Renderer:
         if not piece or piece["state"] != "idle":
             return
 
-        bx, by = piece["x"], piece["y"]
-        cx, cy = self.board_to_px(bx, by)
-        ptype  = piece["type"]
-        fr     = math.radians(state.get("freedom_deg", 5.0))
+        bx, by   = piece["x"], piece["y"]
+        cx, cy   = self.board_to_px(bx, by)
+        ptype    = piece["type"]
+        owner    = piece["owner"]
+        fr       = math.radians(state.get("freedom_deg", 5.0))
+        mana     = state.get("mana", {}).get(owner, 0.0)
+        max_dist = max(0.0, (mana - _BASE_MOVE_COST) / _DISTANCE_COST)
+        mana_r   = max_dist * self._sq
 
         surf = pygame.Surface((self._win_w, self._win_h), pygame.SRCALPHA)
         surf.set_clip(pygame.Rect(self._board_x, self._board_y,
@@ -231,28 +272,37 @@ class Renderer:
                 tx, ty = bx + a, by + b
                 if 0 <= tx <= 8 and 0 <= ty <= 8:
                     px2, py2 = self.board_to_px(tx, ty)
-                    pygame.draw.circle(surf, C_HINT, (px2, py2), r_px)
+                    color = C_HINT_OK if math.hypot(a, b) <= max_dist else C_HINT_NO_MANA
+                    pygame.draw.circle(surf, color, (px2, py2), r_px)
 
         elif ptype == "pawn":
-            fwd     = -1.0 if piece["owner"] == "white" else 1.0
+            fwd     = -1.0 if owner == "white" else 1.0
             max_fwd = 1.0  if piece.get("has_moved") else 2.0
-            _wedge(surf, cx, cy, math.atan2(fwd, 0.0), fr, max_fwd * self._sq)
+            _wedge_mana(surf, cx, cy, math.atan2(fwd, 0.0), fr, max_fwd * self._sq, mana_r)
             for xdir in (1.0, -1.0):
-                a = math.atan2(fwd / _SQRT2, xdir / _SQRT2)
-                _wedge(surf, cx, cy, a, fr, _SQRT2 * self._sq)
+                lx_d = xdir / _SQRT2
+                ly_d = fwd  / _SQRT2
+                has_target = _has_enemy_near(bx, by, owner, lx_d, ly_d,
+                                             _SQRT2 + 0.5, state["pieces"])
+                a      = math.atan2(ly_d, lx_d)
+                full_r = _SQRT2 * self._sq
+                if not has_target:
+                    _wedge(surf, cx, cy, a, fr, full_r, C_HINT_ILLEGAL)
+                else:
+                    _wedge_mana(surf, cx, cy, a, fr, full_r, mana_r)
 
         elif ptype == "king":
             unmoved = not piece.get("has_moved", False)
             for lx, ly in _ALL8:
                 cap = (2.0 if (ly == 0.0 and unmoved)
                        else (1.0 if (lx == 0.0 or ly == 0.0) else _SQRT2))
-                _wedge(surf, cx, cy, math.atan2(ly, lx), fr, cap * self._sq)
+                _wedge_mana(surf, cx, cy, math.atan2(ly, lx), fr, cap * self._sq, mana_r)
 
         else:
             dirs = {"rook": _ORTHO, "bishop": _DIAG, "queen": _ALL8}.get(ptype, [])
             for lx, ly in dirs:
-                r = _max_to_edge(bx, by, lx, ly) * self._sq
-                _wedge(surf, cx, cy, math.atan2(ly, lx), fr, r)
+                full_r = _max_to_edge(bx, by, lx, ly) * self._sq
+                _wedge_mana(surf, cx, cy, math.atan2(ly, lx), fr, full_r, mana_r)
 
         screen.blit(surf, (0, 0))
 
