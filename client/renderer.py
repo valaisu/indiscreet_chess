@@ -8,8 +8,22 @@ Board coordinate system (matches server):
 """
 
 import math
+import os
 
 import pygame
+
+# ---------------------------------------------------------------------------
+# Bundled font
+# ---------------------------------------------------------------------------
+
+_FONT_PATH = os.path.join(os.path.dirname(__file__), "assets", "DejaVuSans.ttf")
+
+
+def _load_font(size: int) -> pygame.font.Font:
+    try:
+        return pygame.font.Font(_FONT_PATH, size)
+    except (FileNotFoundError, OSError):
+        return pygame.font.SysFont("dejavusans,arial,sans-serif", size)
 
 # ---------------------------------------------------------------------------
 # Base logical resolution  (800 × 840 reference window)
@@ -191,10 +205,9 @@ class Renderer:
         self._make_fonts()
 
     def _make_fonts(self) -> None:
-        fam = "dejavusans,arial,sans-serif"
-        self._font_piece = pygame.font.SysFont(fam, max(10, int(self._piece_r * 1.5)))
-        self._font_ui    = pygame.font.SysFont(fam, max(8,  int(16 * self._scale)))
-        self._font_big   = pygame.font.SysFont(fam, max(12, int(36 * self._scale)))
+        self._font_piece = _load_font(max(10, int(self._piece_r * 1.5)))
+        self._font_ui    = _load_font(max(8,  int(16 * self._scale)))
+        self._font_big   = _load_font(max(12, int(36 * self._scale)))
 
     def _update_layout(self, win_w: int, win_h: int) -> None:
         scale = min(win_w / WIN_W, win_h / WIN_H)
