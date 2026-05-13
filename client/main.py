@@ -99,6 +99,7 @@ def _spawn_server(config: dict) -> subprocess.Popen:
 
 _CLICK_R_SELECT = 0.5   # forgiving radius used when nothing is selected
 _CLICK_R_SWITCH = 0.3   # strict radius (≈ piece edge) used when a piece is already selected
+_MOVE_SNAP_MAX  = 0.625   # max distance from click to a valid destination before move is ignored
 
 _SQRT2 = math.sqrt(2.0)
 
@@ -198,7 +199,7 @@ def _snap_destination(bx: float, by: float, piece: dict,
         for dx, dy in dirs:
             try_sector(dx, dy, board_max(dx, dy))
 
-    return best_pt
+    return best_pt, best_d
 
 
 def _find_piece_at(bx: float, by: float,
@@ -246,13 +247,16 @@ def _handle_click(mouse_pos: tuple[int, int],
             if clicked["owner"] == sel["owner"]:
                 return clicked["id"]  # precise click on friendly piece → switch
 
-        freedom = state.get("freedom_deg", 5.0)
-        dest_x, dest_y = _snap_destination(bx, by, sel, freedom) if sel else (bx, by)
-        send_q.put({
-            "type": QUEUE_MOVE,
-            "piece_id": selected_id,
-            "destination": [dest_x, dest_y],
-        })
+        if sel:
+            freedom = state.get("freedom_deg", 5.0)
+            (dest_x, dest_y), snap_d = _snap_destination(bx, by, sel, freedom)
+            if snap_d > _MOVE_SNAP_MAX:
+                return selected_id  # click too far from any valid destination
+            send_q.put({
+                "type": QUEUE_MOVE,
+                "piece_id": selected_id,
+                "destination": [dest_x, dest_y],
+            })
         return None
 
     return selected_id
