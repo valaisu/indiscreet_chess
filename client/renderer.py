@@ -36,10 +36,12 @@ C_LIGHT        = (240, 217, 181)
 C_DARK         = (181, 136,  99)
 C_BOARD_BORDER = (100,  80,  60)
 
-C_WHITE_FILL   = (255, 255, 240)
-C_BLACK_FILL   = ( 45,  45,  45)
-C_WHITE_BORDER = (160, 160, 160)
-C_BLACK_BORDER = (210, 210, 210)
+C_WHITE_FILL   = (255, 255, 255)
+C_BLACK_FILL   = ( 22,  22,  22)
+C_WHITE_BORDER = (200, 200, 200)   # ring drawn on black pieces
+C_BLACK_BORDER = ( 45,  45,  45)   # ring drawn on white pieces
+C_WHITE_ICON   = ( 12,  12,  12)   # icon text on white pieces
+C_BLACK_ICON   = (245, 245, 245)   # icon text on black pieces
 
 C_SELECT       = ( 80, 210,  80)
 C_DEST_MARKER  = (220, 200,  50)
@@ -123,9 +125,13 @@ def _has_enemy_near(bx: float, by: float, owner: str,
 # Piece labels
 # ---------------------------------------------------------------------------
 
-LABELS = {
-    "pawn": "P", "rook": "R", "knight": "N",
-    "bishop": "B", "queen": "Q", "king": "K",
+ICONS = {
+    ("pawn",   "white"): "♙", ("pawn",   "black"): "♟",
+    ("rook",   "white"): "♖", ("rook",   "black"): "♜",
+    ("knight", "white"): "♘", ("knight", "black"): "♞",
+    ("bishop", "white"): "♗", ("bishop", "black"): "♝",
+    ("queen",  "white"): "♕", ("queen",  "black"): "♛",
+    ("king",   "white"): "♔", ("king",   "black"): "♚",
 }
 
 # ---------------------------------------------------------------------------
@@ -185,7 +191,7 @@ class Renderer:
 
     def _make_fonts(self) -> None:
         fam = "dejavusans,arial,sans-serif"
-        self._font_piece = pygame.font.SysFont(fam, max(8,  self._piece_r))
+        self._font_piece = pygame.font.SysFont(fam, max(10, int(self._piece_r * 1.5)))
         self._font_ui    = pygame.font.SysFont(fam, max(8,  int(16 * self._scale)))
         self._font_big   = pygame.font.SysFont(fam, max(12, int(36 * self._scale)))
 
@@ -373,7 +379,8 @@ class Renderer:
             pygame.draw.circle(screen, fill,   (cx, cy), self._piece_r)
             pygame.draw.circle(screen, border, (cx, cy), self._piece_r, 2)
 
-            t = self._font_piece.render(LABELS.get(p["type"], "?"), True, border)
+            icon_color = C_WHITE_ICON if p["owner"] == "white" else C_BLACK_ICON
+            t = self._font_piece.render(ICONS.get((p["type"], p["owner"]), "?"), True, icon_color)
             screen.blit(t, (cx - t.get_width() // 2, cy - t.get_height() // 2))
 
             if p["state"] == "cooldown":
