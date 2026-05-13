@@ -1,11 +1,18 @@
 """Start menu: mode selection and parameter configuration."""
+import json
+import queue
+import socket
 import sys
+import threading
+import time
+
 import pygame
 
 from client.renderer import (
     WIN_W, WIN_H,
     draw_fullscreen_btn, fullscreen_btn_rect,
 )
+from shared.protocol import DISCOVER, ANNOUNCE, DISCOVERY_PORT
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 _C_BG      = ( 30,  30,  30)
@@ -55,6 +62,55 @@ DISPLAY_DEFAULTS: dict = {
 }
 
 
+# ── LAN discovery ────────────────────────────────────────────────────────────
+
+def _scan_lan(timeout: float = 0.8) -> list[dict]:
+    """Broadcast a DISCOVER packet and collect ANNOUNCE replies."""
+    results: list[dict] = []
+    seen: set[str] = set()
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.settimeout(timeout)
+        sock.bind(("", 0))
+        msg = json.dumps({"type": DISCOVER}).encode()
+        sock.sendto(msg, ("<broadcast>", DISCOVERY_PORT))
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            sock.settimeout(remaining)
+            try:
+                data, addr = sock.recvfrom(1024)
+                reply = json.loads(data)
+                if reply.get("type") == ANNOUNCE:
+                    key = f"{addr[0]}:{reply.get('port', DISCOVERY_PORT)}"
+                    if key not in seen:
+                        seen.add(key)
+                        results.append({
+                            "ip":      addr[0],
+                            "port":    reply.get("port", 8765),
+                            "name":    reply.get("name", addr[0]),
+                            "waiting": reply.get("waiting", True),
+                        })
+            except (TimeoutError, socket.timeout):
+                break
+    except Exception as e:
+        print(f"[discovery] scan error: {e}")
+    finally:
+        sock.close()
+    return results
+
+
+def _start_scan(result_q: queue.Queue) -> threading.Thread:
+    def _worker():
+        result_q.put(_scan_lan())
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    return t
+
+
 # ── Dynamic layout ────────────────────────────────────────────────────────────
 
 def _make_layout(win_w: int, win_h: int) -> dict:
@@ -90,9 +146,14 @@ def _make_layout(win_w: int, win_h: int) -> dict:
     )
 
 
+_MAX_SERVERS = 4  # max rows shown in join mode
+
 def _display_top_y(L: dict, mode: str) -> int:
     """Y position of the first display-toggle row."""
-    base = L['s'](52) if mode == "join" else len(_PARAMS) * L['row_h'] + L['s'](8)
+    if mode == "join":
+        base = L['s'](44) + _MAX_SERVERS * L['s'](36) + L['s'](8)
+    else:
+        base = len(_PARAMS) * L['row_h'] + L['s'](8)
     return L['body_y'] + base
 
 
@@ -120,7 +181,18 @@ def _mode_rect(L: dict, i: int) -> pygame.Rect:
 
 def _ip_rect(L: dict) -> pygame.Rect:
     s = L['s']
-    return pygame.Rect(L['off_x'] + s(240), L['body_y'], s(380), s(34))
+    return pygame.Rect(L['off_x'] + s(240), L['body_y'], s(280), s(34))
+
+
+def _scan_btn_rect(L: dict) -> pygame.Rect:
+    s = L['s']
+    ip = _ip_rect(L)
+    return pygame.Rect(ip.right + s(8), L['body_y'], s(90), s(34))
+
+
+def _server_list_rect(L: dict, idx: int) -> pygame.Rect:
+    s = L['s']
+    return pygame.Rect(L['off_x'] + s(85), L['body_y'] + s(44) + idx * s(36), s(625), s(32))
 
 
 def _port_rect(L: dict, mode: str) -> pygame.Rect:
@@ -155,6 +227,11 @@ def run_menu(screen: pygame.Surface) -> dict:
     port         = "8765"
     focused      = None
 
+    scan_q:       queue.Queue        = queue.Queue()
+    scan_thread:  threading.Thread | None = None
+    scanning:     bool               = False
+    servers:      list[dict] | None  = None  # None = not yet scanned
+
     cur_size = (0, 0)
     L        = {}
     fonts    = {}
@@ -178,6 +255,14 @@ def run_menu(screen: pygame.Surface) -> dict:
             refresh(*win_size)
 
         mx, my = pygame.mouse.get_pos()
+
+        # Poll scan results
+        if scanning:
+            try:
+                servers  = scan_q.get_nowait()
+                scanning = False
+            except queue.Empty:
+                pass
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -204,9 +289,21 @@ def run_menu(screen: pygame.Surface) -> dict:
                     pygame.display.toggle_fullscreen()
                 else:
                     focused = None
-                    action  = _click(mx, my, mode, L)
+                    action  = _click(mx, my, mode, L, servers)
                     if action in ("solo", "host", "join"):
-                        mode = action
+                        mode     = action
+                        servers  = None
+                        scanning = False
+                    elif action == "scan":
+                        if not scanning:
+                            servers  = None
+                            scanning = True
+                            scan_thread = _start_scan(scan_q)
+                    elif action and action.startswith("pick_server_"):
+                        idx  = int(action[len("pick_server_"):])
+                        srv  = (servers or [])[idx]
+                        ip   = srv["ip"]
+                        port = str(srv["port"])
                     elif action == "focus_ip":
                         focused = "ip"
                     elif action == "focus_port":
@@ -225,21 +322,28 @@ def run_menu(screen: pygame.Surface) -> dict:
                     elif action and action[0] in "+-":
                         _adjust(vals, action[1:], 1 if action[0] == "+" else -1)
 
-        _draw(screen, fonts, mode, vals, display_vals, ip, port, focused, mx, my, L)
+        _draw(screen, fonts, mode, vals, display_vals, ip, port, focused, mx, my, L,
+              servers, scanning)
         draw_fullscreen_btn(screen, bool(screen.get_flags() & pygame.FULLSCREEN), mx, my)
         pygame.display.flip()
 
 
 # ── Input handling ────────────────────────────────────────────────────────────
 
-def _click(mx: int, my: int, mode: str, L: dict) -> str | None:
+def _click(mx: int, my: int, mode: str, L: dict,
+           servers: list[dict] | None = None) -> str | None:
     for i, m in enumerate(("solo", "host", "join")):
         if _mode_rect(L, i).collidepoint(mx, my):
             return m
 
     if mode == "join":
+        if _scan_btn_rect(L).collidepoint(mx, my):
+            return "scan"
         if _ip_rect(L).collidepoint(mx, my):
             return "focus_ip"
+        for idx in range(len(servers or [])):
+            if _server_list_rect(L, idx).collidepoint(mx, my):
+                return f"pick_server_{idx}"
     else:
         row_h   = L['row_h']
         btn_w   = L['btn_w']
@@ -275,7 +379,8 @@ def _adjust(vals: dict, key: str, direction: int) -> None:
 
 # ── Drawing ───────────────────────────────────────────────────────────────────
 
-def _draw(screen, fonts, mode, vals, display_vals, ip, port, focused, mx, my, L: dict) -> None:
+def _draw(screen, fonts, mode, vals, display_vals, ip, port, focused, mx, my, L: dict,
+          servers: list[dict] | None = None, scanning: bool = False) -> None:
     screen.fill(_C_BG)
 
     cx      = L['cx']
@@ -301,6 +406,29 @@ def _draw(screen, fonts, mode, vals, display_vals, ip, port, focused, mx, my, L:
     if mode == "join":
         _draw_field(screen, fonts['med'], "Server IP:",
                     _ip_rect(L), ip, focused == "ip", mx, my, label_x)
+
+        # Scan button
+        sb  = _scan_btn_rect(L)
+        lbl = "..." if scanning else "Scan"
+        col = _C_BTN_H if sb.collidepoint(mx, my) or scanning else _C_BTN
+        pygame.draw.rect(screen, col, sb, border_radius=4)
+        t = fonts['sml'].render(lbl, True, _C_TEXT)
+        screen.blit(t, (sb.centerx - t.get_width() // 2, sb.centery - t.get_height() // 2))
+
+        # Discovered server list
+        for idx, srv in enumerate((servers or [])[:_MAX_SERVERS]):
+            r   = _server_list_rect(L, idx)
+            col = _C_BTN_H if r.collidepoint(mx, my) else _C_BTN
+            pygame.draw.rect(screen, col, r, border_radius=4)
+            status = "waiting" if srv["waiting"] else "in game"
+            label  = f"{srv['name']}  {srv['ip']}:{srv['port']}  [{status}]"
+            t = fonts['sml'].render(label, True, _C_TEXT)
+            screen.blit(t, (r.x + L['s'](8), r.centery - t.get_height() // 2))
+
+        if not scanning and servers is not None and len(servers) == 0:
+            r = _server_list_rect(L, 0)
+            t = fonts['sml'].render("No servers found", True, (120, 120, 120))
+            screen.blit(t, (r.x + L['s'](8), r.y + (r.height - t.get_height()) // 2))
     else:
         row_h   = L['row_h']
         btn_w   = L['btn_w']
