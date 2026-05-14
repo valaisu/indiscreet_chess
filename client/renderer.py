@@ -293,9 +293,9 @@ class Renderer:
         self._update_layout(*screen.get_size())
         screen.fill(C_BG)
         self._draw_board(screen)
-        self._draw_move_hints(screen, state, selected_id, snap_max, debug)
         self._draw_dest_markers(screen, state)
         self._draw_pieces(screen, state, selected_id, drag_id, drag_px_pos)
+        self._draw_move_hints(screen, state, selected_id, snap_max, debug)
         self._draw_mana_bars(screen, state)
         countdown = state.get("countdown")
         if countdown is not None:
