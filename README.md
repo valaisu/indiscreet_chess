@@ -100,3 +100,17 @@ Choose a mode from the menu:
 | **Join** | Enter a host's IP and port to connect and play as Black |
 
 Click a piece to select it, then click a destination to queue a move. The mana bar shows your current pool.
+
+## Playing with a Friend
+
+**Same local network (e.g. home Wi-Fi):**
+
+1. The host runs `python host.py` and selects **Host**. Note the IP shown, or find it with `hostname -I` (Linux/Mac) or `ipconfig` (Windows).
+2. The guest selects **Join** and enters the host's local IP and port.
+
+**Different network (over the internet):**
+
+The host needs to make their port reachable. Two options:
+
+- **Port forwarding** — forward the chosen port to your machine in your router settings, then share your public IP (e.g. from [whatismyip.com](https://whatismyip.com)).
+- **Tailscale / ZeroTier** — install the same VPN app on both machines. They'll appear on a shared virtual network, so use the Tailscale/ZeroTier IP the same as a local one.
