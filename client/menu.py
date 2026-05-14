@@ -63,12 +63,14 @@ CLIENT_DEFAULTS: dict = {
 _DISPLAY = [
     ("Own timers",  "show_own_timers"),
     ("Opp timers",  "show_opp_timers"),
+    ("Drag pieces", "drag_pieces"),
 ]
 
 DISPLAY_DEFAULTS: dict = {
     **CLIENT_DEFAULTS,
     "show_own_timers": True,
     "show_opp_timers": True,
+    "drag_pieces":     False,
 }
 
 

@@ -388,6 +388,7 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
     last_state_time: float  = 0.0
     selected_id: str | None = None
     debug_mode: bool        = False
+    drag_enabled: bool      = config.get("display", {}).get("drag_pieces", False)
     drag_id: str | None     = None
     drag_pos_px: tuple      = (0, 0)
     drag_prev_sel: str | None = None
@@ -424,13 +425,14 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
                         pygame.display.toggle_fullscreen()
                     elif (last_state and not last_state.get("game_over")
                           and last_state.get("countdown") is None):
-                        bx, by = renderer.px_to_board(*event.pos)
                         draggable = None
-                        if 0 <= bx < 8 and 0 <= by < 8:
-                            clicked = _find_piece_at(bx, by, last_state["pieces"], _CLICK_R_SELECT)
-                            if (clicked and clicked["state"] == "idle"
-                                    and (solo or clicked["owner"] == player_color)):
-                                draggable = clicked
+                        if drag_enabled:
+                            bx, by = renderer.px_to_board(*event.pos)
+                            if 0 <= bx < 8 and 0 <= by < 8:
+                                clicked = _find_piece_at(bx, by, last_state["pieces"], _CLICK_R_SELECT)
+                                if (clicked and clicked["state"] == "idle"
+                                        and (solo or clicked["owner"] == player_color)):
+                                    draggable = clicked
                         if draggable:
                             drag_prev_sel = selected_id
                             drag_id = draggable["id"]
