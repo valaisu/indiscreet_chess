@@ -101,7 +101,8 @@ _CLICK_R_SELECT = 0.5   # forgiving radius used when nothing is selected
 _CLICK_R_SWITCH = 0.3   # strict radius (≈ piece edge) used when a piece is already selected
 _MOVE_SNAP_MAX  = 0.625   # max distance from click to a valid destination before move is ignored
 
-_SQRT2 = math.sqrt(2.0)
+_SQRT2          = math.sqrt(2.0)
+_DIAMETER_PIECE = 0.6   # mirrors server/params.py default
 
 
 def _snap_destination(bx: float, by: float, piece: dict,
@@ -216,40 +217,54 @@ def _snap_destination(bx: float, by: float, piece: dict,
         if verbose:
             print(f"[snap]   pawn fwd={fwd:+.0f}  has_moved={piece.get('has_moved')}  max_fwd={max_fwd}")
         try_sector(0.0, fwd, min(max_fwd, board_max(0.0, fwd)))
-        d_unit = 1.0 / _SQRT2
-        for xdir in (-1.0, 1.0):
-            dx_d, dy_d = xdir * d_unit, fwd * d_unit
-            enemy_found = False
-            if pieces is not None:
+
+        # Diagonal capture circles (friend or foe target, like knight landing zones)
+        diag_r = _SQRT2 * math.tan(freedom_rad)   # circle radius in board units
+        if pieces is not None:
+            for xdir in (-1.0, 1.0):
+                ccx = px + xdir
+                ccy = py + fwd
+                if not (0.0 <= ccx <= 8.0 and 0.0 <= ccy <= 8.0):
+                    continue
+                d_to_center = math.hypot(bx - ccx, by - ccy)
                 for other in pieces:
-                    if other.get("owner") == owner:
+                    if other.get("id") == piece["id"]:
                         continue
-                    ex, ey = other["x"] - px, other["y"] - py
-                    dist_e = math.hypot(ex, ey)
-                    if dist_e < 1e-9 or dist_e > _SQRT2 * 1.5:
+                    other_d = math.hypot(other["x"] - ccx, other["y"] - ccy)
+                    if other_d > diag_r + _DIAMETER_PIECE + 1e-6:
                         continue
-                    dot = (ex * dx_d + ey * dy_d) / dist_e
-                    if math.acos(max(-1.0, min(1.0, dot))) <= freedom_rad:
-                        enemy_found = True
-                        # Cap to SQRT2*0.9999 from pawn so the server's distance
-                        # check (dist <= sqrt(2)) passes even when physics has
-                        # drifted the enemy slightly beyond one diagonal square.
-                        snap_r = min(dist_e, _SQRT2 * 0.9999)
-                        snap_x = px + ex / dist_e * snap_r
-                        snap_y = py + ey / dist_e * snap_r
-                        d = math.hypot(bx - snap_x, by - snap_y)
+                    # Click inside circle and within capture range of this piece → exact position
+                    if (d_to_center <= diag_r
+                            and math.hypot(bx - other["x"], by - other["y"]) <= _DIAMETER_PIECE):
                         if verbose:
-                            label = "BEST   " if d < best_d else "       "
-                            print(f"[snap]   pawn diag xdir={xdir:+.0f}  enemy={other['id']}@"
-                                  f"({other['x']:.3f},{other['y']:.3f})  dist_e={dist_e:.4f}  snap_r={snap_r:.4f}  d={d:.4f}  {label}")
-                        if d < best_d:
-                            best_d, best_pt = d, (snap_x, snap_y)
-            if not enemy_found:
-                if verbose:
-                    print(f"[snap]   pawn diag xdir={xdir:+.0f}  no enemy → sector only")
-                try_sector(dx_d, dy_d, min(_SQRT2, board_max(dx_d, dy_d)))
-            elif verbose:
-                print(f"[snap]   pawn diag xdir={xdir:+.0f}  enemy found, skipping sector")
+                            print(f"[snap]   pawn diag xdir={xdir:+.0f}  "
+                                  f"other={other['id']}  INSIDE+VALID")
+                        return (bx, by), 0.0
+                    # Compute valid arc for this piece and snap to nearest point in it
+                    if other_d < 1e-9:
+                        alpha = math.pi
+                    else:
+                        cos_a = ((diag_r**2 + other_d**2 - _DIAMETER_PIECE**2)
+                                 / (2 * diag_r * other_d))
+                        if cos_a >= 1.0:
+                            continue  # piece too far; no valid arc
+                        alpha = math.acos(max(-1.0, cos_a))
+                    click_angle = math.atan2(by - ccy, bx - ccx)
+                    piece_angle = math.atan2(other["y"] - ccy, other["x"] - ccx)
+                    delta = (click_angle - piece_angle + math.pi) % (2 * math.pi) - math.pi
+                    snap_angle = (click_angle if abs(delta) <= alpha
+                                  else piece_angle + math.copysign(alpha * 0.99, delta))
+                    snap_x = ccx + math.cos(snap_angle) * diag_r * 0.99
+                    snap_y = ccy + math.sin(snap_angle) * diag_r * 0.99
+                    d = math.hypot(bx - snap_x, by - snap_y)
+                    if verbose:
+                        label = "BEST   " if d < best_d else "       "
+                        print(f"[snap]   pawn diag xdir={xdir:+.0f}  other={other['id']}@"
+                              f"({other['x']:.3f},{other['y']:.3f})  "
+                              f"alpha={math.degrees(alpha):.1f}°  "
+                              f"snap=({snap_x:.3f},{snap_y:.3f})  d={d:.4f}  {label}")
+                    if d < best_d:
+                        best_d, best_pt = d, (snap_x, snap_y)
 
     elif ptype == "king":
         hor_max = 2.0 if not piece.get("has_moved") else 1.0

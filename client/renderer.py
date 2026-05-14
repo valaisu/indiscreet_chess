@@ -75,9 +75,10 @@ C_HINT_NO_MANA = (220, 140,  40,  80)  # legal direction, not enough mana
 C_HINT_ILLEGAL = (180,  60,  60,  80)  # move not currently legal
 C_SNAP_ZONE    = ( 70, 130, 220,  50)  # debug: expanded snap zone
 
-# Mirrors server/params.py — used to shade hints by mana affordability
+# Mirrors server/params.py defaults — used for hint rendering
 _BASE_MOVE_COST = 1.0
 _DISTANCE_COST  = 0.2
+_DIAMETER_PIECE = 0.6
 
 _SQRT2 = math.sqrt(2.0)
 _ORTHO = [(1, 0), (-1, 0), (0, 1), (0, -1)]
@@ -353,17 +354,38 @@ class Renderer:
             fwd     = -1.0 if owner == "white" else 1.0
             max_fwd = 1.0  if piece.get("has_moved") else 2.0
             _wedge_mana(surf, cx, cy, self._board_dir_to_angle(0.0, fwd), fr, max_fwd * self._sq, mana_r)
+
+            # Diagonal capture circles (like knight), centered one diagonal square away
+            diag_r_board = _SQRT2 * math.tan(fr)   # circle radius in board units
+            diag_r_px    = max(4, int(diag_r_board * self._sq))
+            diag_color   = C_HINT_OK if _SQRT2 <= max_dist else C_HINT_NO_MANA
+
             for xdir in (1.0, -1.0):
-                lx_d = xdir / _SQRT2
-                ly_d = fwd  / _SQRT2
-                has_target = _has_enemy_near(bx, by, owner, lx_d, ly_d,
-                                             _SQRT2 + 0.5, state["pieces"])
-                a      = self._board_dir_to_angle(lx_d, ly_d)
-                full_r = _SQRT2 * self._sq
-                if not has_target:
-                    _wedge(surf, cx, cy, a, fr, full_r, C_HINT_ILLEGAL)
-                else:
-                    _wedge_mana(surf, cx, cy, a, fr, full_r, mana_r)
+                ccx_b = bx + xdir
+                ccy_b = by + fwd
+                if not (0.0 < ccx_b < 8.0 and 0.0 < ccy_b < 8.0):
+                    continue
+                ccx_px, ccy_px = self.board_to_px(ccx_b, ccy_b)
+
+                # Full circle in red; valid arcs drawn on top per nearby piece
+                pygame.draw.circle(surf, C_HINT_ILLEGAL, (ccx_px, ccy_px), diag_r_px)
+
+                for other in state["pieces"]:
+                    odx = other["x"] - ccx_b
+                    ody = other["y"] - ccy_b
+                    other_d = math.hypot(odx, ody)
+                    if other_d > diag_r_board + _DIAMETER_PIECE + 1e-6:
+                        continue
+                    if other_d < 1e-9:
+                        alpha = math.pi
+                    else:
+                        cos_a = ((diag_r_board**2 + other_d**2 - _DIAMETER_PIECE**2)
+                                 / (2 * diag_r_board * other_d))
+                        if cos_a >= 1.0:
+                            continue
+                        alpha = math.acos(max(-1.0, cos_a))
+                    screen_angle = self._board_dir_to_angle(odx, ody)
+                    _wedge(surf, ccx_px, ccy_px, screen_angle, alpha, diag_r_px, diag_color)
 
         elif ptype == "king":
             unmoved = not piece.get("has_moved", False)
@@ -399,16 +421,20 @@ class Renderer:
         elif ptype == "pawn":
             fwd = -1.0 if owner == "white" else 1.0
             max_fwd = 1.0 if piece.get("has_moved") else 2.0
-            dirs = [
-                (0.0, fwd, min(max_fwd, _max_to_edge(bx, by, 0.0, fwd))),
-                ( 1/_SQRT2, fwd/_SQRT2, min(_SQRT2, _max_to_edge(bx, by,  1/_SQRT2, fwd/_SQRT2))),
-                (-1/_SQRT2, fwd/_SQRT2, min(_SQRT2, _max_to_edge(bx, by, -1/_SQRT2, fwd/_SQRT2))),
-            ]
-            for lx, ly, cap in dirs:
-                pts = _snap_zone_pts(cx, cy, self._board_dir_to_angle(lx, ly),
-                                     fr, cap * self._sq, snap_px)
-                if len(pts) >= 3:
-                    pygame.draw.polygon(surf, C_SNAP_ZONE, pts)
+            # Forward: sector snap zone
+            pts = _snap_zone_pts(cx, cy, self._board_dir_to_angle(0.0, fwd),
+                                 fr, min(max_fwd, _max_to_edge(bx, by, 0.0, fwd)) * self._sq,
+                                 snap_px)
+            if len(pts) >= 3:
+                pygame.draw.polygon(surf, C_SNAP_ZONE, pts)
+            # Diagonal: circle snap zones (like knight)
+            landing_r_px = _SQRT2 * math.tan(fr) * self._sq
+            r = max(1, round(landing_r_px + snap_px))
+            for xdir in (1.0, -1.0):
+                tx, ty = bx + xdir, by + fwd
+                if 0.0 < tx < 8.0 and 0.0 < ty < 8.0:
+                    px2, py2 = self.board_to_px(tx, ty)
+                    pygame.draw.circle(surf, C_SNAP_ZONE, (px2, py2), r)
 
         elif ptype == "king":
             unmoved = not piece.get("has_moved", False)

@@ -131,26 +131,25 @@ def _check_pawn(piece: Piece, dest_x: float, dest_y: float,
             return "pawn cannot move that far forward"
         return None
 
-    # Diagonal capture
-    diag_dirs = [
-        ( 1.0 / _SQRT2, forward_dy / _SQRT2),
-        (-1.0 / _SQRT2, forward_dy / _SQRT2),
-    ]
-    if _in_sector(dx, dy, diag_dirs):
-        if dist > params.SQUARE_SIDE * _SQRT2:
-            return "pawn diagonal move too far"
-        if not _enemy_at_dest(dest_x, dest_y, piece.owner, all_pieces):
-            return "pawn can only move diagonally to capture"
-        return None
+    # Diagonal capture circles (like knight landing zones)
+    s = params.SQUARE_SIDE
+    r = _SQRT2 * s * math.tan(math.radians(params.MOVEMENT_FREEDOM_DEG))
+    for xdir in (1.0, -1.0):
+        ccx = piece.x + xdir * s
+        ccy = piece.y + forward_dy * s
+        if math.hypot(dest_x - ccx, dest_y - ccy) <= r:
+            if not _piece_at_dest(dest_x, dest_y, piece, all_pieces):
+                return "pawn can only move diagonally to capture"
+            return None
 
     return "pawn can only move forward or diagonally forward to capture"
 
 
-def _enemy_at_dest(dest_x: float, dest_y: float, owner: str,
+def _piece_at_dest(dest_x: float, dest_y: float, pawn: Piece,
                    all_pieces: list[Piece]) -> bool:
-    """True if any enemy piece's hitbox overlaps the destination point."""
+    """True if any piece (friend or foe) has its hitbox overlapping dest_x, dest_y."""
     for other in all_pieces:
-        if other.owner == owner:
+        if other is pawn:
             continue
         if math.hypot(other.x - dest_x, other.y - dest_y) < params.DIAMETER_PIECE:
             return True

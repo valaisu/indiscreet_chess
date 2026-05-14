@@ -35,6 +35,7 @@ _EPS = 1e-9
 def advance_and_resolve(pieces: list[Piece], dt: float) -> None:
     """Main physics entry point. Mutates the pieces list in-place."""
     _advance_knights(pieces, dt)
+    _advance_diagonal_pawns(pieces, dt)
     _ccd_loop(pieces, dt)
 
 
@@ -43,8 +44,7 @@ def advance_and_resolve(pieces: list[Piece], dt: float) -> None:
 # ---------------------------------------------------------------------------
 
 def _advance_knights(pieces: list[Piece], dt: float) -> None:
-    to_remove: set[int] = set()  # ids of pieces to remove (use id() to avoid equality issues)
-    piece_map = {id(p): p for p in pieces}
+    to_remove: set[int] = set()
 
     for knight in list(pieces):
         if knight.type != PieceType.KNIGHT or knight.state != PieceState.MOVING:
@@ -56,13 +56,43 @@ def _advance_knights(pieces: list[Piece], dt: float) -> None:
     pieces[:] = [p for p in pieces if id(p) not in to_remove]
 
 
+def _diagonal_pawn_burst(pawn: Piece, pieces: list[Piece], to_remove: set) -> None:
+    """On arrival capture all overlapping pieces; remove pawn if any of those were moving."""
+    for other in pieces:
+        if other is pawn or id(other) in to_remove:
+            continue
+        # Pieces immune during their own travel are skipped
+        if other.state == PieceState.MOVING:
+            if other.type == PieceType.KNIGHT or _is_diagonal_pawn(other):
+                continue
+        dist = math.hypot(other.x - pawn.x, other.y - pawn.y)
+        if dist <= pawn.radius + other.radius:
+            to_remove.add(id(other))
+            if other.state == PieceState.MOVING:
+                to_remove.add(id(pawn))
+
+
+def _advance_diagonal_pawns(pieces: list[Piece], dt: float) -> None:
+    to_remove: set[int] = set()
+
+    for pawn in list(pieces):
+        if not _is_diagonal_pawn(pawn):
+            continue
+        pawn.advance(dt)
+        if pawn.state == PieceState.COOLDOWN and id(pawn) not in to_remove:
+            _diagonal_pawn_burst(pawn, pieces, to_remove)
+
+    pieces[:] = [p for p in pieces if id(p) not in to_remove]
+
+
 def _knight_burst(knight: Piece, pieces: list[Piece], to_remove: set) -> None:
     """Remove all pieces overlapping the knight on arrival; remove knight if any were moving."""
-    R = knight.radius  # each piece has same radius, sum = diameter
     for other in pieces:
         if other is knight or id(other) in to_remove:
             continue
         if other.type == PieceType.GHOST:
+            continue
+        if _is_diagonal_pawn(other):  # immune during diagonal travel
             continue
         dist = math.hypot(other.x - knight.x, other.y - knight.y)
         if dist <= knight.radius + other.radius:
@@ -83,7 +113,8 @@ def _ccd_loop(pieces: list[Piece], dt: float) -> None:
         movers = [p for p in pieces
                   if p.state == PieceState.MOVING
                   and id(p) not in removed
-                  and p.type != PieceType.KNIGHT]
+                  and p.type != PieceType.KNIGHT
+                  and not _is_diagonal_pawn(p)]
 
         if not movers:
             break
@@ -98,6 +129,9 @@ def _ccd_loop(pieces: list[Piece], dt: float) -> None:
                     continue
                 # Knights in MOVING state are immune to collision
                 if b.type == PieceType.KNIGHT and b.state == PieceState.MOVING:
+                    continue
+                # Diagonal-capturing pawns are immune during travel
+                if _is_diagonal_pawn(b):
                     continue
                 # Castling partners are allowed to overlap during transit
                 if a.castling_partner_id and b.id == a.castling_partner_id:
@@ -156,6 +190,13 @@ def _is_forward_pawn(piece: Piece) -> bool:
     dot = (piece.vel_y * forward_dy) / speed
     freedom = math.radians(params.MOVEMENT_FREEDOM_DEG)
     return math.acos(max(-1.0, min(1.0, dot))) <= freedom
+
+
+def _is_diagonal_pawn(piece: Piece) -> bool:
+    """True when this pawn is executing a diagonal capture move (immune during travel)."""
+    return (piece.type == PieceType.PAWN
+            and piece.state == PieceState.MOVING
+            and not _is_forward_pawn(piece))
 
 
 def _continue_after_capture(piece: Piece, cx: float, cy: float) -> None:
