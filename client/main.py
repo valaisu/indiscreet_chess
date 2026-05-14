@@ -388,6 +388,9 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
     last_state_time: float  = 0.0
     selected_id: str | None = None
     debug_mode: bool        = False
+    drag_id: str | None     = None
+    drag_pos_px: tuple      = (0, 0)
+    drag_prev_sel: str | None = None
 
     while True:
         clock.tick(60)
@@ -410,6 +413,7 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
                         return
                     elif selected_id is not None:
                         selected_id = None
+                        drag_id = None
                     else:
                         return
 
@@ -420,13 +424,57 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
                         pygame.display.toggle_fullscreen()
                     elif (last_state and not last_state.get("game_over")
                           and last_state.get("countdown") is None):
-                        selected_id = _handle_click(
-                            event.pos, last_state, selected_id,
-                            send_q, player_color, solo, renderer, snap_max,
-                            debug_mode,
-                        )
+                        bx, by = renderer.px_to_board(*event.pos)
+                        draggable = None
+                        if 0 <= bx < 8 and 0 <= by < 8:
+                            clicked = _find_piece_at(bx, by, last_state["pieces"], _CLICK_R_SELECT)
+                            if (clicked and clicked["state"] == "idle"
+                                    and (solo or clicked["owner"] == player_color)):
+                                draggable = clicked
+                        if draggable:
+                            drag_prev_sel = selected_id
+                            drag_id = draggable["id"]
+                            drag_pos_px = event.pos
+                            selected_id = draggable["id"]
+                        else:
+                            selected_id = _handle_click(
+                                event.pos, last_state, selected_id,
+                                send_q, player_color, solo, renderer, snap_max,
+                                debug_mode,
+                            )
                 if event.button == 3:
                     selected_id = None
+                    drag_id = None
+
+            if event.type == pygame.MOUSEMOTION:
+                if drag_id is not None:
+                    drag_pos_px = event.pos
+
+            if event.type == pygame.MOUSEBUTTONUP:
+                if event.button == 1 and drag_id is not None and last_state:
+                    bx, by = renderer.px_to_board(*event.pos)
+                    sel = next((p for p in last_state["pieces"] if p["id"] == drag_id), None)
+                    if sel is None:
+                        selected_id = None
+                    else:
+                        dist_to_self = math.hypot(bx - sel["x"], by - sel["y"])
+                        if dist_to_self <= _CLICK_R_SWITCH and drag_prev_sel == drag_id:
+                            selected_id = None  # click on already-selected piece → deselect
+                        elif 0 <= bx < 8 and 0 <= by < 8:
+                            freedom = last_state.get("freedom_deg", 5.0)
+                            (dest_x, dest_y), snap_d = _snap_destination(
+                                bx, by, sel, freedom, last_state["pieces"],
+                                verbose=debug_mode)
+                            if snap_d <= snap_max:
+                                send_q.put({
+                                    "type": QUEUE_MOVE,
+                                    "piece_id": drag_id,
+                                    "destination": [dest_x, dest_y],
+                                })
+                                selected_id = None
+                            # else: keep piece selected so user can still click-move
+                        # out of bounds: keep selected
+                    drag_id = None
 
         try:
             while True:
@@ -441,10 +489,17 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
         except queue.Empty:
             pass
 
+        # Cancel drag if the piece was captured
+        if drag_id is not None and last_state:
+            if not any(p["id"] == drag_id for p in last_state["pieces"]):
+                drag_id = None
+                selected_id = None
+
         if last_state:
             elapsed = time.monotonic() - last_state_time
             interp  = interpolate(last_state, elapsed)
-            renderer.render(screen, interp, selected_id, snap_max, debug_mode)
+            renderer.render(screen, interp, selected_id, snap_max, debug_mode,
+                            drag_id, drag_pos_px)
         else:
             renderer.render_waiting(screen)
 

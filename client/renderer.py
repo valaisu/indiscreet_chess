@@ -286,13 +286,15 @@ class Renderer:
 
     def render(self, screen: pygame.Surface, state: dict,
                selected_id: str | None, snap_max: float = 0.0,
-               debug: bool = False) -> None:
+               debug: bool = False,
+               drag_id: str | None = None,
+               drag_px_pos: tuple | None = None) -> None:
         self._update_layout(*screen.get_size())
         screen.fill(C_BG)
         self._draw_board(screen)
         self._draw_move_hints(screen, state, selected_id, snap_max, debug)
         self._draw_dest_markers(screen, state)
-        self._draw_pieces(screen, state, selected_id)
+        self._draw_pieces(screen, state, selected_id, drag_id, drag_px_pos)
         self._draw_mana_bars(screen, state)
         countdown = state.get("countdown")
         if countdown is not None:
@@ -473,12 +475,19 @@ class Renderer:
     # ------------------------------------------------------------------
 
     def _draw_pieces(self, screen: pygame.Surface, state: dict,
-                     selected_id: str | None) -> None:
+                     selected_id: str | None,
+                     drag_id: str | None = None,
+                     drag_px_pos: tuple | None = None) -> None:
         prep_total = state.get("prep_period", 0.5)
         cool_total = state.get("cooldown",    0.8)
         sel_ring   = self._piece_r + max(2, int(5 * self._scale))
 
+        dragged_piece = None
         for p in state["pieces"]:
+            if drag_id is not None and p["id"] == drag_id:
+                dragged_piece = p
+                continue  # draw on top after all other pieces
+
             cx, cy = self.board_to_px(p["x"], p["y"])
 
             if p["type"] == "ghost":
@@ -515,6 +524,17 @@ class Renderer:
                 elif p["state"] == "cooldown" and cool_total > 0:
                     self._draw_timer_arc(screen, cx, cy,
                                          1.0 - timer / cool_total, C_TIMER_COOL)
+
+        if dragged_piece is not None and drag_px_pos is not None:
+            p = dragged_piece
+            cx, cy = drag_px_pos
+            fill, border = (C_WHITE_FILL, C_BLACK_BORDER) if p["owner"] == "white" \
+                           else (C_BLACK_FILL, C_WHITE_BORDER)
+            pygame.draw.circle(screen, fill,   (cx, cy), self._piece_r)
+            pygame.draw.circle(screen, border, (cx, cy), self._piece_r, 2)
+            icon_color = C_WHITE_ICON if p["owner"] == "white" else C_BLACK_ICON
+            t = self._font_piece.render(ICONS.get((p["type"], p["owner"]), "?"), True, icon_color)
+            screen.blit(t, (cx - t.get_width() // 2, cy - t.get_height() // 2))
 
     def _draw_timer_arc(self, screen: pygame.Surface, cx: int, cy: int,
                         fraction: float, color: tuple) -> None:
