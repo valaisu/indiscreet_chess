@@ -73,6 +73,7 @@ C_WIN_TEXT     = (255, 220, 100)
 C_HINT_OK      = (100, 210, 100,  80)  # affordable + legal
 C_HINT_NO_MANA = (220, 140,  40,  80)  # legal direction, not enough mana
 C_HINT_ILLEGAL = (180,  60,  60,  80)  # move not currently legal
+C_SNAP_ZONE    = ( 70, 130, 220,  50)  # debug: expanded snap zone
 
 # Mirrors server/params.py — used to shade hints by mana affordability
 _BASE_MOVE_COST = 1.0
@@ -116,6 +117,29 @@ def _wedge_mana(surf: pygame.Surface, cx: float, cy: float,
     else:
         _wedge(surf, cx, cy, angle, half, full_r, C_HINT_NO_MANA)
         _wedge(surf, cx, cy, angle, half, mana_r, C_HINT_OK)
+
+
+def _snap_zone_pts(cx: float, cy: float, center_angle: float,
+                   freedom_rad: float, max_t_px: float, snap_px: float,
+                   n: int = 24) -> list[tuple[float, float]]:
+    """Polygon for the Euclidean snap zone around one movement sector."""
+    if max_t_px <= 0 or snap_px <= 0:
+        return []
+    half = freedom_rad + math.pi / 2
+    pts = []
+    for i in range(n + 1):
+        diff = -half + 2 * half * i / n
+        excess = max(0.0, abs(diff) - freedom_rad)
+        if excess < 1e-9:
+            r = max_t_px + snap_px
+        elif excess >= math.pi / 2 - 1e-9:
+            r = snap_px
+        else:
+            r = min(snap_px / math.sin(excess), max_t_px + snap_px)
+        pts.append((cx + r * math.cos(center_angle + diff),
+                    cy + r * math.sin(center_angle + diff)))
+    pts.append((cx, cy))
+    return pts
 
 
 def _has_enemy_near(bx: float, by: float, owner: str,
@@ -260,11 +284,12 @@ class Renderer:
     # ------------------------------------------------------------------
 
     def render(self, screen: pygame.Surface, state: dict,
-               selected_id: str | None) -> None:
+               selected_id: str | None, snap_max: float = 0.0,
+               debug: bool = False) -> None:
         self._update_layout(*screen.get_size())
         screen.fill(C_BG)
         self._draw_board(screen)
-        self._draw_move_hints(screen, state, selected_id)
+        self._draw_move_hints(screen, state, selected_id, snap_max, debug)
         self._draw_dest_markers(screen, state)
         self._draw_pieces(screen, state, selected_id)
         self._draw_mana_bars(screen, state)
@@ -284,7 +309,9 @@ class Renderer:
     # ------------------------------------------------------------------
 
     def _draw_move_hints(self, screen: pygame.Surface, state: dict,
-                          selected_id: str | None) -> None:
+                          selected_id: str | None,
+                          snap_max: float = 0.0,
+                          debug: bool = False) -> None:
         if not selected_id:
             return
         piece = next((p for p in state["pieces"] if p["id"] == selected_id), None)
@@ -303,6 +330,9 @@ class Renderer:
         surf = pygame.Surface((self._win_w, self._win_h), pygame.SRCALPHA)
         surf.set_clip(pygame.Rect(self._board_x, self._board_y,
                                    8 * self._sq, 8 * self._sq))
+
+        if snap_max > 0 and debug:
+            self._draw_snap_zones(surf, piece, bx, by, cx, cy, ptype, owner, fr, snap_max)
 
         if ptype == "knight":
             r_px = max(4, int(math.sqrt(5.0) * math.tan(fr) * self._sq))
@@ -343,6 +373,56 @@ class Renderer:
                 _wedge_mana(surf, cx, cy, self._board_dir_to_angle(lx, ly), fr, full_r, mana_r)
 
         screen.blit(surf, (0, 0))
+
+    def _draw_snap_zones(self, surf: pygame.Surface,
+                          piece: dict, bx: float, by: float,
+                          cx: float, cy: float,
+                          ptype: str, owner: str,
+                          fr: float, snap_max: float) -> None:
+        snap_px = snap_max * self._sq
+
+        if ptype == "knight":
+            landing_r_px = math.sqrt(5.0) * math.tan(fr) * self._sq
+            r = max(1, round(landing_r_px + snap_px))
+            for a, b in [(2,1),(2,-1),(-2,1),(-2,-1),(1,2),(1,-2),(-1,2),(-1,-2)]:
+                tx, ty = bx + a, by + b
+                if 0 <= tx <= 8 and 0 <= ty <= 8:
+                    px2, py2 = self.board_to_px(tx, ty)
+                    pygame.draw.circle(surf, C_SNAP_ZONE, (px2, py2), r)
+
+        elif ptype == "pawn":
+            fwd = -1.0 if owner == "white" else 1.0
+            max_fwd = 1.0 if piece.get("has_moved") else 2.0
+            dirs = [
+                (0.0, fwd, min(max_fwd, _max_to_edge(bx, by, 0.0, fwd))),
+                ( 1/_SQRT2, fwd/_SQRT2, min(_SQRT2, _max_to_edge(bx, by,  1/_SQRT2, fwd/_SQRT2))),
+                (-1/_SQRT2, fwd/_SQRT2, min(_SQRT2, _max_to_edge(bx, by, -1/_SQRT2, fwd/_SQRT2))),
+            ]
+            for lx, ly, cap in dirs:
+                pts = _snap_zone_pts(cx, cy, self._board_dir_to_angle(lx, ly),
+                                     fr, cap * self._sq, snap_px)
+                if len(pts) >= 3:
+                    pygame.draw.polygon(surf, C_SNAP_ZONE, pts)
+
+        elif ptype == "king":
+            unmoved = not piece.get("has_moved", False)
+            for lx, ly in _ALL8:
+                cap = (2.0 if (ly == 0.0 and unmoved)
+                       else (1.0 if (lx == 0.0 or ly == 0.0) else _SQRT2))
+                max_t = min(cap, _max_to_edge(bx, by, lx, ly))
+                pts = _snap_zone_pts(cx, cy, self._board_dir_to_angle(lx, ly),
+                                     fr, max_t * self._sq, snap_px)
+                if len(pts) >= 3:
+                    pygame.draw.polygon(surf, C_SNAP_ZONE, pts)
+
+        else:
+            dirs = {"rook": _ORTHO, "bishop": _DIAG, "queen": _ALL8}.get(ptype, [])
+            for lx, ly in dirs:
+                max_t = _max_to_edge(bx, by, lx, ly)
+                pts = _snap_zone_pts(cx, cy, self._board_dir_to_angle(lx, ly),
+                                     fr, max_t * self._sq, snap_px)
+                if len(pts) >= 3:
+                    pygame.draw.polygon(surf, C_SNAP_ZONE, pts)
 
     # ------------------------------------------------------------------
     # Board

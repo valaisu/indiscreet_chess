@@ -106,7 +106,8 @@ _SQRT2 = math.sqrt(2.0)
 
 def _snap_destination(bx: float, by: float, piece: dict,
                       freedom_deg: float,
-                      pieces: list[dict] | None = None) -> tuple[tuple[float, float], float]:
+                      pieces: list[dict] | None = None,
+                      verbose: bool = False) -> tuple[tuple[float, float], float]:
     """
     Return the nearest point in the piece's legal movement area to (bx, by).
     Legal area is a union of sectors: each direction has a cone of ±freedom_deg.
@@ -121,10 +122,18 @@ def _snap_destination(bx: float, by: float, piece: dict,
     click_dy = by - py
     click_r  = math.hypot(click_dx, click_dy)
     if click_r < 1e-9:
+        if verbose:
+            print(f"[snap]   zero-distance click on piece {piece['id']}")
         return (px, py), float("inf")
     nx, ny      = click_dx / click_r, click_dy / click_r
     click_angle = math.atan2(click_dy, click_dx)
     freedom_rad = math.radians(freedom_deg)
+
+    if verbose:
+        print(f"[snap]   piece={piece['id']} {ptype}@({px:.3f},{py:.3f})  "
+              f"click_offset=({click_dx:+.3f},{click_dy:+.3f})  "
+              f"r={click_r:.3f}  angle={math.degrees(click_angle):.1f}°  "
+              f"freedom=±{freedom_deg}°")
 
     def board_max(dx: float, dy: float) -> float:
         t = float("inf")
@@ -146,39 +155,66 @@ def _snap_destination(bx: float, by: float, piece: dict,
 
         if abs(delta) <= freedom_rad:
             # Inside sector: use exact click direction, clamp to max distance.
-            actual_max = min(max_t, board_max(nx, ny))
+            # 0.9999: tiny buffer so server-side position skew (physics can nudge
+            # idle pieces between snapshot and validation) doesn't push dist over max_t.
+            actual_max = min(max_t, board_max(nx, ny)) * 0.9999
             r  = min(click_r, actual_max)
             cx, cy = px + r * nx, py + r * ny
             d  = click_r - r  # >= 0 since r <= click_r
+            if verbose:
+                label = "INSIDE " if d < best_d else "inside "
+                print(f"[snap]     sector {math.degrees(center_angle):+6.1f}°  "
+                      f"delta={math.degrees(delta):+5.1f}°  {label}"
+                      f"→ dest=({cx:.3f},{cy:.3f})  d={d:.4f}")
         else:
             # Outside sector: snap to the nearest edge ray.
-            edge_angle = center_angle + math.copysign(freedom_rad, delta)
+            # Use 0.99 to stay just inside the sector so floating-point in the
+            # server's acos check never rounds above freedom_rad.
+            edge_angle = center_angle + math.copysign(freedom_rad * 0.99, delta)
             ex, ey = math.cos(edge_angle), math.sin(edge_angle)
-            edge_max = min(max_t, board_max(ex, ey))
+            # 0.9999: cos/sin may not be a perfect unit vector, so t * hypot(ex,ey)
+            # can slightly exceed max_t; pulling back ensures dist <= max_t.
+            edge_max = min(max_t, board_max(ex, ey)) * 0.9999
             t  = max(0.0, min(click_dx * ex + click_dy * ey, edge_max))
             cx, cy = px + t * ex, py + t * ey
             d  = math.hypot(bx - cx, by - cy)
+            if verbose:
+                label = "SNAP   " if d < best_d else "snap   "
+                print(f"[snap]     sector {math.degrees(center_angle):+6.1f}°  "
+                      f"delta={math.degrees(delta):+5.1f}°  {label}"
+                      f"→ dest=({cx:.3f},{cy:.3f})  d={d:.4f}")
 
         if d < best_d:
             best_d, best_pt = d, (cx, cy)
 
     if ptype == "knight":
         landing_r = math.sqrt(5.0) * math.tan(freedom_rad)
+        if verbose:
+            print(f"[snap]   knight landing_r={landing_r:.3f}")
         for adx, ady in [(2,1),(2,-1),(-2,1),(-2,-1),(1,2),(1,-2),(-1,2),(-1,-2)]:
             x, y = px + adx, py + ady
             if 0.0 < x < 8.0 and 0.0 < y < 8.0:
                 d = math.hypot(bx - x, by - y)
                 if d <= landing_r:
+                    if verbose:
+                        print(f"[snap]     square ({x:.1f},{y:.1f})  d={d:.4f}  INSIDE circle → exact click")
                     return (bx, by), 0.0  # inside circle: use click position
                 edge_d = d - landing_r   # distance from click to nearest circle edge
+                if verbose:
+                    label = "BEST   " if edge_d < best_d else "       "
+                    print(f"[snap]     square ({x:.1f},{y:.1f})  d={d:.4f}  edge_d={edge_d:.4f}  {label}")
                 if edge_d < best_d:
                     best_d = edge_d
-                    best_pt = (x + (bx - x) / d * landing_r,
-                               y + (by - y) / d * landing_r)
+                    # 0.99: snap slightly inside the circle so the server's
+                    # floating-point distance check (<= r) always passes.
+                    best_pt = (x + (bx - x) / d * landing_r * 0.99,
+                               y + (by - y) / d * landing_r * 0.99)
 
     elif ptype == "pawn":
         fwd     = -1.0 if owner == "white" else 1.0
         max_fwd = 1.0 if piece.get("has_moved") else 2.0
+        if verbose:
+            print(f"[snap]   pawn fwd={fwd:+.0f}  has_moved={piece.get('has_moved')}  max_fwd={max_fwd}")
         try_sector(0.0, fwd, min(max_fwd, board_max(0.0, fwd)))
         d_unit = 1.0 / _SQRT2
         for xdir in (-1.0, 1.0):
@@ -195,11 +231,25 @@ def _snap_destination(bx: float, by: float, piece: dict,
                     dot = (ex * dx_d + ey * dy_d) / dist_e
                     if math.acos(max(-1.0, min(1.0, dot))) <= freedom_rad:
                         enemy_found = True
-                        d = math.hypot(bx - other["x"], by - other["y"])
+                        # Cap to SQRT2*0.9999 from pawn so the server's distance
+                        # check (dist <= sqrt(2)) passes even when physics has
+                        # drifted the enemy slightly beyond one diagonal square.
+                        snap_r = min(dist_e, _SQRT2 * 0.9999)
+                        snap_x = px + ex / dist_e * snap_r
+                        snap_y = py + ey / dist_e * snap_r
+                        d = math.hypot(bx - snap_x, by - snap_y)
+                        if verbose:
+                            label = "BEST   " if d < best_d else "       "
+                            print(f"[snap]   pawn diag xdir={xdir:+.0f}  enemy={other['id']}@"
+                                  f"({other['x']:.3f},{other['y']:.3f})  dist_e={dist_e:.4f}  snap_r={snap_r:.4f}  d={d:.4f}  {label}")
                         if d < best_d:
-                            best_d, best_pt = d, (other["x"], other["y"])
+                            best_d, best_pt = d, (snap_x, snap_y)
             if not enemy_found:
+                if verbose:
+                    print(f"[snap]   pawn diag xdir={xdir:+.0f}  no enemy → sector only")
                 try_sector(dx_d, dy_d, min(_SQRT2, board_max(dx_d, dy_d)))
+            elif verbose:
+                print(f"[snap]   pawn diag xdir={xdir:+.0f}  enemy found, skipping sector")
 
     elif ptype == "king":
         hor_max = 2.0 if not piece.get("has_moved") else 1.0
@@ -221,6 +271,9 @@ def _snap_destination(bx: float, by: float, piece: dict,
         else:                   dirs = ortho + diag
         for dx, dy in dirs:
             try_sector(dx, dy, board_max(dx, dy))
+
+    if verbose:
+        print(f"[snap]   best=({best_pt[0]:.3f},{best_pt[1]:.3f})  snap_d={best_d:.4f}")
 
     return best_pt, best_d
 
@@ -245,37 +298,57 @@ def _handle_click(mouse_pos: tuple[int, int],
                   player_color: str,
                   solo: bool,
                   renderer: Renderer,
-                  snap_max: float = _MOVE_SNAP_MAX) -> str | None:
+                  snap_max: float = _MOVE_SNAP_MAX,
+                  debug: bool = False) -> str | None:
     bx, by = renderer.px_to_board(*mouse_pos)
     if not (0 <= bx < 8 and 0 <= by < 8):
         return selected_id
 
     pieces = state["pieces"]
 
+    if debug:
+        print(f"[click] board=({bx:.3f},{by:.3f})  selected={selected_id}")
+
     if selected_id is None:
         clicked = _find_piece_at(bx, by, pieces, _CLICK_R_SELECT)
         if clicked:
             mine = solo or clicked["owner"] == player_color
             if mine and clicked["state"] == "idle":
+                if debug:
+                    print(f"[click] → selected {clicked['id']}")
                 return clicked["id"]
+            elif debug:
+                print(f"[click] → ignored piece {clicked['id']} "
+                      f"(mine={mine} state={clicked['state']})")
+        elif debug:
+            print(f"[click] → no piece within r={_CLICK_R_SELECT}")
 
     else:
         # Strict hit-test: auto-switching is off; only an exact click on a piece counts.
         clicked = _find_piece_at(bx, by, pieces, _CLICK_R_SWITCH)
 
         if clicked and clicked["id"] == selected_id:
+            if debug:
+                print(f"[click] → deselected {selected_id}")
             return None  # clicked own piece → deselect
 
         sel = next((p for p in pieces if p["id"] == selected_id), None)
         if clicked and clicked["state"] == "idle" and sel:
             if clicked["owner"] == sel["owner"]:
+                if debug:
+                    print(f"[click] → switched to {clicked['id']}")
                 return clicked["id"]  # precise click on friendly piece → switch
 
         if sel:
             freedom = state.get("freedom_deg", 5.0)
-            (dest_x, dest_y), snap_d = _snap_destination(bx, by, sel, freedom, pieces)
+            (dest_x, dest_y), snap_d = _snap_destination(bx, by, sel, freedom, pieces,
+                                                          verbose=debug)
             if snap_d > snap_max:
+                if debug:
+                    print(f"[click] → IGNORED snap_d={snap_d:.4f} > snap_max={snap_max}")
                 return selected_id  # click too far from any valid destination
+            if debug:
+                print(f"[click] → MOVE {selected_id} to ({dest_x:.3f},{dest_y:.3f})  snap_d={snap_d:.4f}")
             send_q.put({
                 "type": QUEUE_MOVE,
                 "piece_id": selected_id,
@@ -314,6 +387,7 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
     last_state: dict | None = None
     last_state_time: float  = 0.0
     selected_id: str | None = None
+    debug_mode: bool        = False
 
     while True:
         clock.tick(60)
@@ -328,6 +402,9 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
                     pygame.display.toggle_fullscreen()
                 elif event.key == pygame.K_f:
                     renderer.toggle_flip()
+                elif event.key == pygame.K_d:
+                    debug_mode = not debug_mode
+                    print(f"[debug] debug mode {'ON' if debug_mode else 'OFF'}")
                 elif event.key == pygame.K_ESCAPE:
                     if last_state and last_state.get("game_over"):
                         return
@@ -345,6 +422,7 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
                         selected_id = _handle_click(
                             event.pos, last_state, selected_id,
                             send_q, player_color, solo, renderer, snap_max,
+                            debug_mode,
                         )
                 if event.button == 3:
                     selected_id = None
@@ -365,7 +443,7 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
         if last_state:
             elapsed = time.monotonic() - last_state_time
             interp  = interpolate(last_state, elapsed)
-            renderer.render(screen, interp, selected_id)
+            renderer.render(screen, interp, selected_id, snap_max, debug_mode)
         else:
             renderer.render_waiting(screen)
 
