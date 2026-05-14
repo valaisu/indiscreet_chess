@@ -418,7 +418,8 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
                     w, h = screen.get_size()
                     if fullscreen_btn_rect(w, h).collidepoint(event.pos):
                         pygame.display.toggle_fullscreen()
-                    elif last_state and not last_state.get("game_over"):
+                    elif (last_state and not last_state.get("game_over")
+                          and last_state.get("countdown") is None):
                         selected_id = _handle_click(
                             event.pos, last_state, selected_id,
                             send_q, player_color, solo, renderer, snap_max,

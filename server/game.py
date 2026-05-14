@@ -12,11 +12,12 @@ class GameState:
         self.solo = solo
         self.pieces: list[Piece] = initial_board()
         self.mana: dict[str, float] = {
-            "white": params.MAXIMUM_MANA,
-            "black": params.MAXIMUM_MANA,
+            "white": params.MAXIMUM_MANA * 0.8,
+            "black": params.MAXIMUM_MANA * 0.8,
         }
         self.tick: int = 0
         self.started: bool = False
+        self.countdown: int | None = None
         self.game_over: bool = False
         self.winner: str | None = None
         self._pending: list[dict] = []
@@ -78,9 +79,16 @@ class GameState:
     # ------------------------------------------------------------------
 
     async def run(self, broadcast_fn) -> None:
-        self.started = True
         tick_dt = 1.0 / params.TICK_RATE
         loop = asyncio.get_event_loop()
+
+        for n in (3, 2, 1, 0):
+            self.countdown = n
+            await broadcast_fn(self.to_dict())
+            await asyncio.sleep(1.0 if n > 0 else 0.5)
+
+        self.countdown = None
+        self.started = True
 
         while not self.game_over:
             t0 = loop.time()
@@ -358,6 +366,7 @@ class GameState:
             "freedom_deg": params.MOVEMENT_FREEDOM_DEG,
             "prep_period": params.PREPARATION_PERIOD,
             "cooldown":    params.COOLDOWN,
+            "countdown": self.countdown,
             "game_over": self.game_over,
             "winner": self.winner,
         }

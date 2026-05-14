@@ -232,6 +232,7 @@ class Renderer:
         self._font_piece = _load_font(max(10, int(self._piece_r * 1.5)))
         self._font_ui    = _load_font(max(8,  int(16 * self._scale)))
         self._font_big   = _load_font(max(12, int(36 * self._scale)))
+        self._font_huge  = _load_font(max(24, int(120 * self._scale)))
 
     def _update_layout(self, win_w: int, win_h: int) -> None:
         scale = min(win_w / WIN_W, win_h / WIN_H)
@@ -293,7 +294,10 @@ class Renderer:
         self._draw_dest_markers(screen, state)
         self._draw_pieces(screen, state, selected_id)
         self._draw_mana_bars(screen, state)
-        if state.get("game_over"):
+        countdown = state.get("countdown")
+        if countdown is not None:
+            self._draw_countdown(screen, countdown)
+        elif state.get("game_over"):
             self._draw_game_over(screen, state.get("winner"))
 
     def render_waiting(self, screen: pygame.Surface) -> None:
@@ -567,6 +571,19 @@ class Renderer:
         lbl = self._font_ui.render(
             f"{owner.capitalize()}  {value:.1f} / {max_mana:.0f}", True, C_TEXT)
         screen.blit(lbl, (x + self._gap, y + mh // 2 - lbl.get_height() // 2))
+
+    # ------------------------------------------------------------------
+    # Countdown overlay
+    # ------------------------------------------------------------------
+
+    def _draw_countdown(self, screen: pygame.Surface, n: int) -> None:
+        overlay = pygame.Surface((self._win_w, self._win_h), pygame.SRCALPHA)
+        overlay.fill(C_OVERLAY)
+        screen.blit(overlay, (0, 0))
+        msg = "Go!" if n == 0 else str(n)
+        t = self._font_huge.render(msg, True, C_WIN_TEXT)
+        screen.blit(t, (self._win_w // 2 - t.get_width() // 2,
+                        self._win_h // 2 - t.get_height() // 2))
 
     # ------------------------------------------------------------------
     # Game over overlay
