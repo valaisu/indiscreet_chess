@@ -192,9 +192,12 @@ def _sweep_time(a: Piece, b: Piece, max_t: float) -> float | None:
         if a.type != PieceType.PAWN or a.owner == b.owner or _is_forward_pawn(a):
             return None
 
-    # Skip if already overlapping (can happen during castling or after a capture).
-    if px * px + py * py < R * R:
-        return None
+    # If already touching or overlapping, only collide if approaching.
+    # Separating pieces are let go freely (e.g. after a capture continuation or castling).
+    if px * px + py * py <= R * R:
+        if vx * px + vy * py >= 0.0:
+            return None   # separating or parallel — let them move apart
+        return _EPS       # approaching while in contact → immediate collision
 
     # Quadratic: (v·v)t² + 2(p·v)t + (p·p − R²) = 0
     A = vx * vx + vy * vy
@@ -202,21 +205,21 @@ def _sweep_time(a: Piece, b: Piece, max_t: float) -> float | None:
         return None  # no relative motion
 
     B = 2.0 * (px * vx + py * vy)
-    C = px * px + py * py - R * R
+    C = px * px + py * py - R * R  # positive: pieces are separated
 
     disc = B * B - 4.0 * A * C
     if disc < 0.0:
         return None
 
-    sqrt_disc = math.sqrt(disc)
-    t1 = (-B - sqrt_disc) / (2.0 * A)
-    t2 = (-B + sqrt_disc) / (2.0 * A)
+    t1 = (-B - math.sqrt(disc)) / (2.0 * A)
 
-    # Take the smaller positive root; must be within (EPS, max_t].
-    for t in (t1, t2):
-        if _EPS < t <= max_t:
-            return t
-    return None
+    # t1 ≤ _EPS means pieces are essentially at contact (dist barely above R due
+    # to float drift from a previous stop).  Apply the same approach-direction
+    # test used for the overlapping case instead of falling through to t2.
+    if t1 <= _EPS:
+        return None if B >= 0.0 else _EPS
+
+    return t1 if t1 <= max_t else None
 
 
 # ---------------------------------------------------------------------------
@@ -265,5 +268,13 @@ def _resolve_collision(a: Piece, b: Piece, removed: set) -> None:
         _continue_after_capture(b, a.x, a.y)
 
     else:
-        # A is blocked: stop at the current contact point.
-        a.stop_at(a.x, a.y)
+        # A is blocked: push it to the exact contact surface so the stored
+        # distance is precisely R rather than R ± float drift.
+        dx = a.x - b.x
+        dy = a.y - b.y
+        dist = math.hypot(dx, dy)
+        R = a.radius + b.radius
+        if dist > 1e-9:
+            a.stop_at(b.x + dx / dist * R, b.y + dy / dist * R)
+        else:
+            a.stop_at(a.x, a.y)
