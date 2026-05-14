@@ -22,9 +22,11 @@ from shared import protocol
 
 
 class Server:
-    def __init__(self, solo: bool) -> None:
+    def __init__(self, solo: bool,
+                 params_white: dict | None = None,
+                 params_black: dict | None = None) -> None:
         self.solo = solo
-        self.game = GameState(solo=solo)
+        self.game = GameState(solo=solo, params_white=params_white, params_black=params_black)
         # Maps color -> websocket. In solo mode both entries point to same ws.
         self.clients: dict[str, any] = {}
         self._ready = asyncio.Event()
@@ -146,6 +148,7 @@ async def main() -> None:
     parser.add_argument("--solo",        action="store_true")
     parser.add_argument("--host",        default=params.SERVER_HOST)
     parser.add_argument("--port",        type=int,   default=params.SERVER_PORT)
+    # Shared params (apply to both players when no per-player override)
     parser.add_argument("--mana-refill", type=float, default=params.MANA_REFILL_RATE)
     parser.add_argument("--max-mana",    type=float, default=params.MAXIMUM_MANA)
     parser.add_argument("--base-cost",   type=float, default=params.BASE_MOVE_COST)
@@ -155,19 +158,38 @@ async def main() -> None:
     parser.add_argument("--cooldown",    type=float, default=params.COOLDOWN)
     parser.add_argument("--freedom",     type=float, default=params.MOVEMENT_FREEDOM_DEG)
     parser.add_argument("--diameter",    type=float, default=params.DIAMETER_PIECE)
+    # Per-player overrides (used in handicap mode)
+    for _color in ("white", "black"):
+        parser.add_argument(f"--{_color}-mana-refill", type=float, default=None)
+        parser.add_argument(f"--{_color}-max-mana",    type=float, default=None)
+        parser.add_argument(f"--{_color}-base-cost",   type=float, default=None)
+        parser.add_argument(f"--{_color}-dist-cost",   type=float, default=None)
+        parser.add_argument(f"--{_color}-prep",        type=float, default=None)
+        parser.add_argument(f"--{_color}-speed",       type=float, default=None)
+        parser.add_argument(f"--{_color}-cooldown",    type=float, default=None)
+        parser.add_argument(f"--{_color}-freedom",     type=float, default=None)
+        parser.add_argument(f"--{_color}-diameter",    type=float, default=None)
     args = parser.parse_args()
 
-    params.MANA_REFILL_RATE      = args.mana_refill
-    params.MAXIMUM_MANA          = args.max_mana
-    params.BASE_MOVE_COST        = args.base_cost
-    params.DISTANCE_COST         = args.dist_cost
-    params.PREPARATION_PERIOD    = args.prep
-    params.MOVEMENT_SPEED        = args.speed
-    params.COOLDOWN              = args.cooldown
-    params.MOVEMENT_FREEDOM_DEG  = args.freedom
-    params.DIAMETER_PIECE        = args.diameter
+    def _make_pp(color: str) -> dict:
+        def _g(attr: str, base: float) -> float:
+            v = getattr(args, f"{color}_{attr}", None)
+            return v if v is not None else base
+        return {
+            "mana_refill_rate":     _g("mana_refill", args.mana_refill),
+            "maximum_mana":         _g("max_mana",    args.max_mana),
+            "base_move_cost":       _g("base_cost",   args.base_cost),
+            "distance_cost":        _g("dist_cost",   args.dist_cost),
+            "preparation_period":   _g("prep",        args.prep),
+            "movement_speed":       _g("speed",       args.speed),
+            "cooldown":             _g("cooldown",    args.cooldown),
+            "movement_freedom_deg": _g("freedom",     args.freedom),
+            "diameter_piece":       _g("diameter",    args.diameter),
+        }
 
-    server = Server(solo=args.solo)
+    server = Server(solo=args.solo,
+                    params_white=_make_pp("white"),
+                    params_black=_make_pp("black"))
     print(f"[server] Listening on {args.host}:{args.port} "
           f"({'solo' if args.solo else 'multiplayer'})")
 

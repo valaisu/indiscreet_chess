@@ -44,10 +44,15 @@ class Piece:
     is_double_move: bool = False     # this move is a pawn double-step
     ghost_created: bool = False      # ghost has already been spawned for this move
     move_start_y: float = 0.0       # pawn's y at the moment the double move was queued
+    # Per-player params (set from owner's handicap params when a move is queued)
+    movement_speed: float = field(default_factory=lambda: params.MOVEMENT_SPEED)
+    cooldown_duration: float = field(default_factory=lambda: params.COOLDOWN)
+    diameter: float = field(default_factory=lambda: params.DIAMETER_PIECE)
+    freedom_deg: float = field(default_factory=lambda: params.MOVEMENT_FREEDOM_DEG)
 
     @property
     def radius(self) -> float:
-        return params.DIAMETER_PIECE / 2.0
+        return self.diameter / 2.0
 
     def advance(self, dt: float) -> None:
         """Advance state machine by dt seconds. No collision detection."""
@@ -70,7 +75,7 @@ class Piece:
         if dist < 1e-9:
             self._arrive()
             return
-        speed = params.MOVEMENT_SPEED
+        speed = self.movement_speed
         self.vel_x = dx / dist * speed
         self.vel_y = dy / dist * speed
         self.state = PieceState.MOVING
@@ -92,7 +97,7 @@ class Piece:
         self.vel_x = 0.0
         self.vel_y = 0.0
         self.state = PieceState.COOLDOWN
-        self.state_timer = params.COOLDOWN
+        self.state_timer = self.cooldown_duration
 
     def stop_at(self, x: float, y: float) -> None:
         """Halt the piece at a given position (used by collision resolution)."""

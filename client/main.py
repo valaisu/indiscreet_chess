@@ -74,20 +74,34 @@ async def _network_loop(url: str, color: str,
 # ---------------------------------------------------------------------------
 
 def _spawn_server(config: dict) -> subprocess.Popen:
-    p = config["params"]
-    args = [
-        sys.executable, "-m", "server.main",
-        "--port",        str(config["port"]),
-        "--mana-refill", str(p["mana_refill_rate"]),
-        "--max-mana",    str(p["maximum_mana"]),
-        "--base-cost",   str(p["base_move_cost"]),
-        "--dist-cost",   str(p["distance_cost"]),
-        "--prep",        str(p["preparation_period"]),
-        "--speed",       str(p["movement_speed"]),
-        "--cooldown",    str(p["cooldown"]),
-        "--freedom",     str(p["movement_freedom_deg"]),
-        "--diameter",    str(p["diameter_piece"]),
-    ]
+    args = [sys.executable, "-m", "server.main", "--port", str(config["port"])]
+    if config.get("handicap"):
+        for prefix, p in (("white", config["params_white"]),
+                          ("black", config["params_black"])):
+            args += [
+                f"--{prefix}-mana-refill", str(p["mana_refill_rate"]),
+                f"--{prefix}-max-mana",    str(p["maximum_mana"]),
+                f"--{prefix}-base-cost",   str(p["base_move_cost"]),
+                f"--{prefix}-dist-cost",   str(p["distance_cost"]),
+                f"--{prefix}-prep",        str(p["preparation_period"]),
+                f"--{prefix}-speed",       str(p["movement_speed"]),
+                f"--{prefix}-cooldown",    str(p["cooldown"]),
+                f"--{prefix}-freedom",     str(p["movement_freedom_deg"]),
+                f"--{prefix}-diameter",    str(p["diameter_piece"]),
+            ]
+    else:
+        p = config["params"]
+        args += [
+            "--mana-refill", str(p["mana_refill_rate"]),
+            "--max-mana",    str(p["maximum_mana"]),
+            "--base-cost",   str(p["base_move_cost"]),
+            "--dist-cost",   str(p["distance_cost"]),
+            "--prep",        str(p["preparation_period"]),
+            "--speed",       str(p["movement_speed"]),
+            "--cooldown",    str(p["cooldown"]),
+            "--freedom",     str(p["movement_freedom_deg"]),
+            "--diameter",    str(p["diameter_piece"]),
+        ]
     if config["mode"] == "solo":
         args.append("--solo")
     return subprocess.Popen(args)
@@ -357,7 +371,8 @@ def _handle_click(mouse_pos: tuple[int, int],
                 return clicked["id"]  # precise click on friendly piece → switch
 
         if sel:
-            freedom = state.get("freedom_deg", 5.0)
+            _fd = state.get("freedom_deg", 5.0)
+            freedom = _fd.get(sel["owner"], 5.0) if isinstance(_fd, dict) else _fd
             (dest_x, dest_y), snap_d = _snap_destination(bx, by, sel, freedom, pieces,
                                                           verbose=debug)
             if snap_d > snap_max:
@@ -480,7 +495,8 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
                         if dist_to_self <= _CLICK_R_SWITCH and drag_prev_sel == drag_id:
                             selected_id = None  # click on already-selected piece → deselect
                         elif 0 <= bx < 8 and 0 <= by < 8:
-                            freedom = last_state.get("freedom_deg", 5.0)
+                            _fd = last_state.get("freedom_deg", 5.0)
+                            freedom = _fd.get(sel["owner"], 5.0) if isinstance(_fd, dict) else _fd
                             (dest_x, dest_y), snap_d = _snap_destination(
                                 bx, by, sel, freedom, last_state["pieces"],
                                 verbose=debug_mode)

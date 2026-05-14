@@ -139,43 +139,52 @@ def _make_layout(win_w: int, win_h: int) -> dict:
         return max(1, int(v * scale))
 
     return dict(
-        scale   = scale,
-        off_x   = off_x,
-        off_y   = off_y,
-        win_w   = win_w,
-        win_h   = win_h,
-        cx      = off_x + s(400),
-        title_y = off_y + s(42),
-        mode_y  = off_y + s(100),
-        sep_y   = off_y + s(150),
-        body_y  = off_y + s(168),
-        row_h   = s(36),
-        btn_w   = max(4, s(28)),
-        btn_h   = max(4, s(28)),
-        label_x = off_x + s(85),
-        minus_x = off_x + s(508),
-        val_x   = off_x + s(578),
-        plus_x  = off_x + s(638),
-        f_big   = max(12, s(34)),
-        f_med   = max(8,  s(18)),
-        f_sml   = max(6,  s(14)),
-        s       = s,
+        scale    = scale,
+        off_x    = off_x,
+        off_y    = off_y,
+        win_w    = win_w,
+        win_h    = win_h,
+        cx       = off_x + s(400),
+        title_y  = off_y + s(42),
+        mode_y   = off_y + s(100),
+        sep_y    = off_y + s(150),
+        body_y   = off_y + s(168),
+        row_h    = s(36),
+        btn_w    = max(4, s(28)),
+        btn_h    = max(4, s(28)),
+        label_x  = off_x + s(85),
+        minus_x  = off_x + s(508),
+        val_x    = off_x + s(578),
+        plus_x   = off_x + s(638),
+        # Handicap two-column positions
+        h_w_minus = off_x + s(340),
+        h_w_val   = off_x + s(390),
+        h_w_plus  = off_x + s(435),
+        h_b_minus = off_x + s(510),
+        h_b_val   = off_x + s(560),
+        h_b_plus  = off_x + s(605),
+        f_big    = max(12, s(34)),
+        f_med    = max(8,  s(18)),
+        f_sml    = max(6,  s(14)),
+        s        = s,
     )
 
 
 _MAX_SERVERS = 4  # max rows shown in join mode
 
 
-def _port_y(L: dict, mode: str) -> int:
+def _port_y(L: dict, mode: str, handicap: bool = False) -> int:
     if mode == "join":
         base = L['s'](44) + _MAX_SERVERS * L['s'](36) + L['s'](8)
     else:
-        base = len(_PARAMS) * L['row_h'] + L['s'](8)
+        # 1 toggle row + 1 header row (handicap only) + param rows
+        extra = 1 + (1 if handicap else 0)
+        base = (extra + len(_PARAMS)) * L['row_h'] + L['s'](8)
     return L['body_y'] + base + L['s'](16)
 
 
-def _start_y(L: dict, mode: str) -> int:
-    return _port_y(L, mode) + L['s'](52)
+def _start_y(L: dict, mode: str, handicap: bool = False) -> int:
+    return _port_y(L, mode, handicap) + L['s'](52)
 
 
 def _mode_rect(L: dict, i: int) -> pygame.Rect:
@@ -201,14 +210,21 @@ def _server_list_rect(L: dict, idx: int) -> pygame.Rect:
     return pygame.Rect(L['off_x'] + s(85), L['body_y'] + s(44) + idx * s(36), s(625), s(32))
 
 
-def _port_rect(L: dict, mode: str) -> pygame.Rect:
+def _port_rect(L: dict, mode: str, handicap: bool = False) -> pygame.Rect:
     s = L['s']
-    return pygame.Rect(L['off_x'] + s(240), _port_y(L, mode), s(120), s(34))
+    return pygame.Rect(L['off_x'] + s(240), _port_y(L, mode, handicap), s(120), s(34))
 
 
-def _start_rect(L: dict, mode: str) -> pygame.Rect:
+def _start_rect(L: dict, mode: str, handicap: bool = False) -> pygame.Rect:
     s = L['s']
-    return pygame.Rect(L['cx'] - s(100), _start_y(L, mode), s(200), s(48))
+    return pygame.Rect(L['cx'] - s(100), _start_y(L, mode, handicap), s(200), s(48))
+
+
+def _handicap_rect(L: dict) -> pygame.Rect:
+    ry  = L['body_y']
+    off = (L['row_h'] - L['btn_h']) // 2
+    tw  = max(L['btn_w'] + L['s'](24), L['s'](52))
+    return pygame.Rect(L['plus_x'], ry + off, tw, L['btn_h'])
 
 
 def _fmt(val: float, step: float) -> str:
@@ -228,6 +244,9 @@ def run_menu(screen: pygame.Surface) -> dict:
 
     mode         = "solo"
     vals         = dict(DEFAULTS)
+    vals_w       = dict(DEFAULTS)   # white params in handicap mode
+    vals_b       = dict(DEFAULTS)   # black params in handicap mode
+    handicap     = False
     display_vals = _persistent_display
     ip           = "localhost"
     port         = "8765"
@@ -298,7 +317,7 @@ def run_menu(screen: pygame.Surface) -> dict:
                     refresh(*screen.get_size())
                 else:
                     focused = None
-                    action  = _click(mx, my, mode, L, servers)
+                    action  = _click(mx, my, mode, L, servers, handicap)
                     if action in ("solo", "host", "join"):
                         mode     = action
                         servers  = None
@@ -317,20 +336,28 @@ def run_menu(screen: pygame.Surface) -> dict:
                         focused = "ip"
                     elif action == "focus_port":
                         focused = "port"
+                    elif action == "toggle_handicap":
+                        handicap = not handicap
+                        if handicap:
+                            vals_w = dict(vals)
+                            vals_b = dict(vals)
                     elif action == "start":
-                        return {
-                            "mode":    mode,
-                            "host_ip": ip.strip() or "localhost",
-                            "port":    int(port) if port.isdigit() else 8765,
-                            "params":  vals,
-                            "display": display_vals,
-                        }
+                        base = {"mode": mode, "host_ip": ip.strip() or "localhost",
+                                "port": int(port) if port.isdigit() else 8765,
+                                "display": display_vals, "handicap": handicap}
+                        if handicap:
+                            return {**base, "params_white": vals_w, "params_black": vals_b}
+                        return {**base, "params": vals}
+                    elif action and action[0] in "+-" and ":" in action:
+                        direction = 1 if action[0] == "+" else -1
+                        player, key = action[1:].split(":", 1)
+                        _adjust(vals_w if player == "W" else vals_b, key, direction)
                     elif action and action[0] in "+-":
                         direction = 1 if action[0] == "+" else -1
                         _adjust(vals, action[1:], direction)
 
-        _draw(screen, fonts, mode, vals, display_vals, ip, port, focused, mx, my, L,
-              servers, scanning)
+        _draw(screen, fonts, mode, vals, vals_w, vals_b, handicap, display_vals,
+              ip, port, focused, mx, my, L, servers, scanning)
         draw_fullscreen_btn(screen, bool(screen.get_flags() & pygame.FULLSCREEN), mx, my)
         _draw_settings_btn(screen, mx, my)
         pygame.display.flip()
@@ -339,7 +366,8 @@ def run_menu(screen: pygame.Surface) -> dict:
 # ── Input handling ────────────────────────────────────────────────────────────
 
 def _click(mx: int, my: int, mode: str, L: dict,
-           servers: list[dict] | None = None) -> str | None:
+           servers: list[dict] | None = None,
+           handicap: bool = False) -> str | None:
     for i, m in enumerate(("solo", "host", "join")):
         if _mode_rect(L, i).collidepoint(mx, my):
             return m
@@ -353,23 +381,43 @@ def _click(mx: int, my: int, mode: str, L: dict,
             if _server_list_rect(L, idx).collidepoint(mx, my):
                 return f"pick_server_{idx}"
     else:
-        row_h   = L['row_h']
-        btn_w   = L['btn_w']
-        btn_h   = L['btn_h']
-        minus_x = L['minus_x']
-        plus_x  = L['plus_x']
-        body_y  = L['body_y']
-        for idx, (_, key, *_rest) in enumerate(_PARAMS):
-            ry  = body_y + idx * row_h
-            off = (row_h - btn_h) // 2
-            if pygame.Rect(minus_x, ry + off, btn_w, btn_h).collidepoint(mx, my):
-                return f"-{key}"
-            if pygame.Rect(plus_x,  ry + off, btn_w, btn_h).collidepoint(mx, my):
-                return f"+{key}"
+        row_h = L['row_h']
+        btn_w = L['btn_w']
+        btn_h = L['btn_h']
+        body_y = L['body_y']
 
-    if _port_rect(L, mode).collidepoint(mx, my):
+        # Handicap toggle (first row)
+        if _handicap_rect(L).collidepoint(mx, my):
+            return "toggle_handicap"
+
+        if not handicap:
+            minus_x = L['minus_x']
+            plus_x  = L['plus_x']
+            param_y = body_y + row_h   # params start after toggle row
+            for idx, (_, key, *_rest) in enumerate(_PARAMS):
+                ry  = param_y + idx * row_h
+                off = (row_h - btn_h) // 2
+                if pygame.Rect(minus_x, ry + off, btn_w, btn_h).collidepoint(mx, my):
+                    return f"-{key}"
+                if pygame.Rect(plus_x,  ry + off, btn_w, btn_h).collidepoint(mx, my):
+                    return f"+{key}"
+        else:
+            param_y = body_y + 2 * row_h   # params start after toggle + header rows
+            for idx, (_, key, *_rest) in enumerate(_PARAMS):
+                ry  = param_y + idx * row_h
+                off = (row_h - btn_h) // 2
+                if pygame.Rect(L['h_w_minus'], ry + off, btn_w, btn_h).collidepoint(mx, my):
+                    return f"-W:{key}"
+                if pygame.Rect(L['h_w_plus'],  ry + off, btn_w, btn_h).collidepoint(mx, my):
+                    return f"+W:{key}"
+                if pygame.Rect(L['h_b_minus'], ry + off, btn_w, btn_h).collidepoint(mx, my):
+                    return f"-B:{key}"
+                if pygame.Rect(L['h_b_plus'],  ry + off, btn_w, btn_h).collidepoint(mx, my):
+                    return f"+B:{key}"
+
+    if _port_rect(L, mode, handicap).collidepoint(mx, my):
         return "focus_port"
-    if _start_rect(L, mode).collidepoint(mx, my):
+    if _start_rect(L, mode, handicap).collidepoint(mx, my):
         return "start"
     return None
 
@@ -390,7 +438,8 @@ def _adjust_client(vals: dict, key: str, direction: int) -> None:
 
 # ── Drawing ───────────────────────────────────────────────────────────────────
 
-def _draw(screen, fonts, mode, vals, display_vals, ip, port, focused, mx, my, L: dict,
+def _draw(screen, fonts, mode, vals, vals_w, vals_b, handicap, display_vals,
+          ip, port, focused, mx, my, L: dict,
           servers: list[dict] | None = None, scanning: bool = False) -> None:
     screen.fill(_C_BG)
 
@@ -441,44 +490,91 @@ def _draw(screen, fonts, mode, vals, display_vals, ip, port, focused, mx, my, L:
             t = fonts['sml'].render("No servers found", True, (120, 120, 120))
             screen.blit(t, (r.x + L['s'](8), r.y + (r.height - t.get_height()) // 2))
     else:
-        row_h   = L['row_h']
-        btn_w   = L['btn_w']
-        btn_h   = L['btn_h']
-        minus_x = L['minus_x']
-        plus_x  = L['plus_x']
-        val_x   = L['val_x']
-        body_y  = L['body_y']
+        row_h  = L['row_h']
+        btn_w  = L['btn_w']
+        btn_h  = L['btn_h']
+        body_y = L['body_y']
 
-        for idx, (label, key, _lo, _hi, step) in enumerate(_PARAMS):
-            ry  = body_y + idx * row_h
-            cy  = ry + row_h // 2
-            off = (row_h - btn_h) // 2
+        # Handicap toggle row
+        ry0 = body_y
+        cy0 = ry0 + row_h // 2
+        t = fonts['sml'].render("Asymmetric settings", True, _C_TEXT)
+        screen.blit(t, (label_x, cy0 - t.get_height() // 2))
+        hr  = _handicap_rect(L)
+        col = (60, 140, 60) if handicap else _C_BTN
+        if hr.collidepoint(mx, my):
+            col = (90, 180, 90) if handicap else _C_BTN_H
+        pygame.draw.rect(screen, col, hr, border_radius=4)
+        t = fonts['sml'].render("ON" if handicap else "OFF", True, _C_TEXT)
+        screen.blit(t, (hr.centerx - t.get_width() // 2, hr.centery - t.get_height() // 2))
 
-            t = fonts['sml'].render(label, True, _C_TEXT)
-            screen.blit(t, (label_x, cy - t.get_height() // 2))
-
-            for bx_btn, lbl in ((minus_x, "−"), (plus_x, "+")):
-                r   = pygame.Rect(bx_btn, ry + off, btn_w, btn_h)
-                col = _C_BTN_H if r.collidepoint(mx, my) else _C_BTN
-                pygame.draw.rect(screen, col, r, border_radius=4)
-                t = fonts['med'].render(lbl, True, _C_TEXT)
-                screen.blit(t, (r.centerx - t.get_width() // 2,
-                                r.centery - t.get_height() // 2))
-
-            sv = _fmt(vals[key], step)
-            t  = fonts['med'].render(sv, True, _C_TEXT)
-            screen.blit(t, (val_x - t.get_width() // 2, cy - t.get_height() // 2))
+        if not handicap:
+            minus_x = L['minus_x']
+            plus_x  = L['plus_x']
+            val_x   = L['val_x']
+            param_y = body_y + row_h
+            for idx, (label, key, _lo, _hi, step) in enumerate(_PARAMS):
+                ry  = param_y + idx * row_h
+                cy  = ry + row_h // 2
+                off = (row_h - btn_h) // 2
+                t = fonts['sml'].render(label, True, _C_TEXT)
+                screen.blit(t, (label_x, cy - t.get_height() // 2))
+                for bx_btn, lbl in ((minus_x, "−"), (plus_x, "+")):
+                    r   = pygame.Rect(bx_btn, ry + off, btn_w, btn_h)
+                    col = _C_BTN_H if r.collidepoint(mx, my) else _C_BTN
+                    pygame.draw.rect(screen, col, r, border_radius=4)
+                    t = fonts['med'].render(lbl, True, _C_TEXT)
+                    screen.blit(t, (r.centerx - t.get_width() // 2,
+                                    r.centery - t.get_height() // 2))
+                sv = _fmt(vals[key], step)
+                t  = fonts['med'].render(sv, True, _C_TEXT)
+                screen.blit(t, (val_x - t.get_width() // 2, cy - t.get_height() // 2))
+        else:
+            # Column headers
+            hdr_y = body_y + row_h + row_h // 2
+            for hdr, hx in (("White", L['h_w_val']), ("Black", L['h_b_val'])):
+                t = fonts['sml'].render(hdr, True, (200, 200, 120))
+                screen.blit(t, (hx - t.get_width() // 2, hdr_y - t.get_height() // 2))
+            param_y = body_y + 2 * row_h
+            for idx, (label, key, _lo, _hi, step) in enumerate(_PARAMS):
+                ry  = param_y + idx * row_h
+                cy  = ry + row_h // 2
+                off = (row_h - btn_h) // 2
+                t = fonts['sml'].render(label, True, _C_TEXT)
+                screen.blit(t, (label_x, cy - t.get_height() // 2))
+                # White column
+                for bx_btn, lbl in ((L['h_w_minus'], "−"), (L['h_w_plus'], "+")):
+                    r   = pygame.Rect(bx_btn, ry + off, btn_w, btn_h)
+                    col = _C_BTN_H if r.collidepoint(mx, my) else _C_BTN
+                    pygame.draw.rect(screen, col, r, border_radius=4)
+                    t = fonts['med'].render(lbl, True, _C_TEXT)
+                    screen.blit(t, (r.centerx - t.get_width() // 2,
+                                    r.centery - t.get_height() // 2))
+                sv = _fmt(vals_w[key], step)
+                t  = fonts['med'].render(sv, True, _C_TEXT)
+                screen.blit(t, (L['h_w_val'] - t.get_width() // 2, cy - t.get_height() // 2))
+                # Black column
+                for bx_btn, lbl in ((L['h_b_minus'], "−"), (L['h_b_plus'], "+")):
+                    r   = pygame.Rect(bx_btn, ry + off, btn_w, btn_h)
+                    col = _C_BTN_H if r.collidepoint(mx, my) else _C_BTN
+                    pygame.draw.rect(screen, col, r, border_radius=4)
+                    t = fonts['med'].render(lbl, True, _C_TEXT)
+                    screen.blit(t, (r.centerx - t.get_width() // 2,
+                                    r.centery - t.get_height() // 2))
+                sv = _fmt(vals_b[key], step)
+                t  = fonts['med'].render(sv, True, _C_TEXT)
+                screen.blit(t, (L['h_b_val'] - t.get_width() // 2, cy - t.get_height() // 2))
 
     _draw_field(screen, fonts['med'], "Port:",
-                _port_rect(L, mode), port, focused == "port", mx, my, label_x)
+                _port_rect(L, mode, handicap), port, focused == "port", mx, my, label_x)
 
     if mode != "solo":
         color_label = "You play as White" if mode == "host" else "You play as Black"
         t  = fonts['sml'].render(color_label, True, (160, 160, 160))
-        sr = _start_rect(L, mode)
+        sr = _start_rect(L, mode, handicap)
         screen.blit(t, (cx - t.get_width() // 2, sr.bottom + s(8)))
 
-    sr  = _start_rect(L, mode)
+    sr  = _start_rect(L, mode, handicap)
     col = _C_START_H if sr.collidepoint(mx, my) else _C_START
     pygame.draw.rect(screen, col, sr, border_radius=8)
     t = fonts['big'].render("START", True, _C_TEXT)

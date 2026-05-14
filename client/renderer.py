@@ -82,6 +82,13 @@ _DIAMETER_PIECE = 0.6
 
 _SQRT2 = math.sqrt(2.0)
 _ORTHO = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+
+
+def _pval(data, owner: str, default):
+    """Read a value that may be a float or a per-owner dict."""
+    if isinstance(data, dict):
+        return data.get(owner, default)
+    return data if data is not None else default
 _DIAG  = [( 1/_SQRT2,  1/_SQRT2), ( 1/_SQRT2, -1/_SQRT2),
           (-1/_SQRT2,  1/_SQRT2), (-1/_SQRT2, -1/_SQRT2)]
 _ALL8  = _ORTHO + _DIAG
@@ -329,9 +336,12 @@ class Renderer:
         cx, cy   = self.board_to_px(bx, by)
         ptype    = piece["type"]
         owner    = piece["owner"]
-        fr       = math.radians(state.get("freedom_deg", 5.0))
+        fr       = math.radians(_pval(state.get("freedom_deg", 5.0), owner, 5.0))
         mana     = state.get("mana", {}).get(owner, 0.0)
-        max_dist = max(0.0, (mana - _BASE_MOVE_COST) / _DISTANCE_COST)
+        pp       = state.get("player_params", {}).get(owner, {})
+        base_cost = pp.get("base_move_cost", _BASE_MOVE_COST)
+        dist_cost = pp.get("distance_cost", _DISTANCE_COST)
+        max_dist = max(0.0, (mana - base_cost) / dist_cost) if dist_cost > 1e-9 else 8.0
         mana_r   = max_dist * self._sq
 
         surf = pygame.Surface((self._win_w, self._win_h), pygame.SRCALPHA)
@@ -508,8 +518,6 @@ class Renderer:
                      selected_id: str | None,
                      drag_id: str | None = None,
                      drag_px_pos: tuple | None = None) -> None:
-        prep_total = state.get("prep_period", 0.5)
-        cool_total = state.get("cooldown",    0.8)
         sel_ring   = self._piece_r + max(2, int(5 * self._scale))
 
         dragged_piece = None
@@ -547,7 +555,9 @@ class Renderer:
             show    = (is_own     and self._display.get("show_own_timers")) or \
                       (not is_own and self._display.get("show_opp_timers"))
             if show:
-                timer = p.get("state_timer", 0.0)
+                timer      = p.get("state_timer", 0.0)
+                prep_total = _pval(state.get("prep_period", 0.5), p["owner"], 0.5)
+                cool_total = _pval(state.get("cooldown",    0.8), p["owner"], 0.8)
                 if p["state"] == "preparation" and prep_total > 0:
                     self._draw_timer_arc(screen, cx, cy,
                                          1.0 - timer / prep_total, C_TIMER_PREP)
@@ -597,18 +607,17 @@ class Renderer:
     # ------------------------------------------------------------------
 
     def _draw_mana_bars(self, screen: pygame.Surface, state: dict) -> None:
-        mana     = state.get("mana", {})
-        max_mana = state.get("max_mana", 10.0)
-        bar_w    = 8 * self._sq
-        mh       = self._mana_h
-        gap      = max(2, int(6 * self._scale))
+        mana  = state.get("mana", {})
+        bar_w = 8 * self._sq
+        mh    = self._mana_h
+        gap   = max(2, int(6 * self._scale))
 
         self._draw_one_mana(screen, mana.get("black", 0.0), "black",
                              self._board_x, self._board_y - mh - gap,
-                             bar_w, max_mana, mh)
+                             bar_w, _pval(state.get("max_mana", 5.0), "black", 5.0), mh)
         self._draw_one_mana(screen, mana.get("white", 0.0), "white",
                              self._board_x, self._board_y + 8 * self._sq + gap,
-                             bar_w, max_mana, mh)
+                             bar_w, _pval(state.get("max_mana", 5.0), "white", 5.0), mh)
 
     def _draw_one_mana(self, screen: pygame.Surface, value: float,
                         owner: str, x: int, y: int, w: int,

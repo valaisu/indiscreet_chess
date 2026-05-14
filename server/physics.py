@@ -25,7 +25,6 @@ This guarantees correct ordering when multiple pieces are moving simultaneously.
 
 import math
 
-from . import params
 from .pieces import Piece, PieceType, PieceState
 
 # Small epsilon to avoid re-detecting the same surface contact.
@@ -188,7 +187,7 @@ def _is_forward_pawn(piece: Piece) -> bool:
         return False
     forward_dy = -1.0 if piece.owner == "white" else 1.0
     dot = (piece.vel_y * forward_dy) / speed
-    freedom = math.radians(params.MOVEMENT_FREEDOM_DEG)
+    freedom = math.radians(piece.freedom_deg)
     return math.acos(max(-1.0, min(1.0, dot))) <= freedom
 
 
@@ -201,7 +200,7 @@ def _is_diagonal_pawn(piece: Piece) -> bool:
 
 def _continue_after_capture(piece: Piece, cx: float, cy: float) -> None:
     """Continue piece in same direction, stopping when cx,cy is perpendicular."""
-    speed = params.MOVEMENT_SPEED
+    speed = piece.movement_speed
     ux = piece.vel_x / speed
     uy = piece.vel_y / speed
     perp_dist = max(0.0, (cx - piece.x) * ux + (cy - piece.y) * uy)

@@ -23,7 +23,7 @@ _ALL8 = _ORTHO + _DIAG
 
 
 def validate_move(piece: Piece, dest_x: float, dest_y: float,
-                  all_pieces: list[Piece]) -> str | None:
+                  all_pieces: list[Piece], freedom_deg: float) -> str | None:
     """Return a rejection reason string, or None if the move is legal."""
     dx = dest_x - piece.x
     dy = dest_y - piece.y
@@ -32,20 +32,20 @@ def validate_move(piece: Piece, dest_x: float, dest_y: float,
 
     match piece.type:
         case PieceType.ROOK:
-            if not _in_sector(dx, dy, _ORTHO):
+            if not _in_sector(dx, dy, _ORTHO, freedom_deg):
                 return "rook must move orthogonally"
         case PieceType.BISHOP:
-            if not _in_sector(dx, dy, _DIAG):
+            if not _in_sector(dx, dy, _DIAG, freedom_deg):
                 return "bishop must move diagonally"
         case PieceType.QUEEN:
-            if not _in_sector(dx, dy, _ALL8):
+            if not _in_sector(dx, dy, _ALL8, freedom_deg):
                 return "queen must move orthogonally or diagonally"
         case PieceType.KING:
-            return _check_king(piece, dx, dy, all_pieces)
+            return _check_king(piece, dx, dy, all_pieces, freedom_deg)
         case PieceType.PAWN:
-            return _check_pawn(piece, dest_x, dest_y, dx, dy, all_pieces)
+            return _check_pawn(piece, dest_x, dest_y, dx, dy, all_pieces, freedom_deg)
         case PieceType.KNIGHT:
-            return _check_knight(dx, dy)
+            return _check_knight(dx, dy, freedom_deg)
     return None
 
 
@@ -53,9 +53,10 @@ def validate_move(piece: Piece, dest_x: float, dest_y: float,
 # Direction helpers
 # ---------------------------------------------------------------------------
 
-def _in_sector(dx: float, dy: float, dirs: list[tuple[float, float]]) -> bool:
-    """True if (dx, dy) is within MOVEMENT_FREEDOM_DEG of any direction in dirs."""
-    freedom = math.radians(params.MOVEMENT_FREEDOM_DEG)
+def _in_sector(dx: float, dy: float, dirs: list[tuple[float, float]],
+               freedom_deg: float) -> bool:
+    """True if (dx, dy) is within freedom_deg of any direction in dirs."""
+    freedom = math.radians(freedom_deg)
     length = math.hypot(dx, dy)
     for lx, ly in dirs:
         dot = (dx * lx + dy * ly) / length
@@ -81,17 +82,17 @@ def _closest_cap(dx: float, dy: float) -> float:
 # ---------------------------------------------------------------------------
 
 def _check_king(piece: Piece, dx: float, dy: float,
-                all_pieces: list[Piece]) -> str | None:
+                all_pieces: list[Piece], freedom_deg: float) -> str | None:
     dist = math.hypot(dx, dy)
 
     # Castling: unmoved king, strictly horizontal, distance (1, 2] squares
     if (not piece.has_moved
-            and _in_sector(dx, dy, [(1.0, 0.0), (-1.0, 0.0)])
+            and _in_sector(dx, dy, [(1.0, 0.0), (-1.0, 0.0)], freedom_deg)
             and params.SQUARE_SIDE < dist <= 2 * params.SQUARE_SIDE):
-        return _check_castling(piece, dx, all_pieces)
+        return _check_castling(piece, dx, all_pieces, freedom_deg)
 
     # Normal king move
-    if not _in_sector(dx, dy, _ALL8):
+    if not _in_sector(dx, dy, _ALL8, freedom_deg):
         return "king must move orthogonally or diagonally"
     if dist > _closest_cap(dx, dy):
         return "king can only move 1 square"
@@ -99,7 +100,7 @@ def _check_king(piece: Piece, dx: float, dy: float,
 
 
 def _check_castling(piece: Piece, dx: float,
-                    all_pieces: list[Piece]) -> str | None:
+                    all_pieces: list[Piece], freedom_deg: float) -> str | None:
     rook_col = 7 if dx > 0 else 0
     rook_x = (rook_col + 0.5) * params.SQUARE_SIDE
     rook = next(
@@ -120,12 +121,13 @@ def _check_castling(piece: Piece, dx: float,
 
 
 def _check_pawn(piece: Piece, dest_x: float, dest_y: float,
-                dx: float, dy: float, all_pieces: list[Piece]) -> str | None:
+                dx: float, dy: float, all_pieces: list[Piece],
+                freedom_deg: float) -> str | None:
     forward_dy = -1.0 if piece.owner == "white" else 1.0
     dist = math.hypot(dx, dy)
 
     # Forward move (no captures allowed)
-    if _in_sector(dx, dy, [(0.0, forward_dy)]):
+    if _in_sector(dx, dy, [(0.0, forward_dy)], freedom_deg):
         max_fwd = (2 if not piece.has_moved else 1) * params.SQUARE_SIDE
         if dist > max_fwd:
             return "pawn cannot move that far forward"
@@ -133,7 +135,7 @@ def _check_pawn(piece: Piece, dest_x: float, dest_y: float,
 
     # Diagonal capture circles (like knight landing zones)
     s = params.SQUARE_SIDE
-    r = _SQRT2 * s * math.tan(math.radians(params.MOVEMENT_FREEDOM_DEG))
+    r = _SQRT2 * s * math.tan(math.radians(freedom_deg))
     for xdir in (1.0, -1.0):
         ccx = piece.x + xdir * s
         ccy = piece.y + forward_dy * s
@@ -151,7 +153,7 @@ def _piece_at_dest(dest_x: float, dest_y: float, pawn: Piece,
     for other in all_pieces:
         if other is pawn or other.owner == pawn.owner:
             continue
-        if math.hypot(other.x - dest_x, other.y - dest_y) < params.DIAMETER_PIECE:
+        if math.hypot(other.x - dest_x, other.y - dest_y) < pawn.diameter:
             return True
     return False
 
@@ -168,9 +170,9 @@ def seg_dist(px: float, py: float,
     return math.hypot(px - (ax + t * ddx), py - (ay + t * ddy))
 
 
-def _check_knight(dx: float, dy: float) -> str | None:
+def _check_knight(dx: float, dy: float, freedom_deg: float) -> str | None:
     s = params.SQUARE_SIDE
-    r = math.sqrt(5.0) * s * math.tan(math.radians(params.MOVEMENT_FREEDOM_DEG))
+    r = math.sqrt(5.0) * s * math.tan(math.radians(freedom_deg))
     targets = (
         [(a * s, b * s) for a in (2.0, -2.0) for b in (1.0, -1.0)] +
         [(a * s, b * s) for a in (1.0, -1.0) for b in (2.0, -2.0)]

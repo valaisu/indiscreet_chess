@@ -7,13 +7,37 @@ from .rules import validate_move
 from shared.protocol import GAME_STATE, MOVE_REJECTED, GAME_OVER
 
 
+def _build_pp(overrides: dict | None) -> dict:
+    """Merge per-player overrides with global param defaults."""
+    o = overrides or {}
+    return {
+        "mana_refill_rate":     o.get("mana_refill_rate",    params.MANA_REFILL_RATE),
+        "maximum_mana":         o.get("maximum_mana",        params.MAXIMUM_MANA),
+        "base_move_cost":       o.get("base_move_cost",      params.BASE_MOVE_COST),
+        "distance_cost":        o.get("distance_cost",       params.DISTANCE_COST),
+        "preparation_period":   o.get("preparation_period",  params.PREPARATION_PERIOD),
+        "movement_speed":       o.get("movement_speed",      params.MOVEMENT_SPEED),
+        "cooldown":             o.get("cooldown",            params.COOLDOWN),
+        "movement_freedom_deg": o.get("movement_freedom_deg",params.MOVEMENT_FREEDOM_DEG),
+        "diameter_piece":       o.get("diameter_piece",      params.DIAMETER_PIECE),
+    }
+
+
 class GameState:
-    def __init__(self, solo: bool = False) -> None:
+    def __init__(self, solo: bool = False,
+                 params_white: dict | None = None,
+                 params_black: dict | None = None) -> None:
         self.solo = solo
         self.pieces: list[Piece] = initial_board()
+        self._pp: dict[str, dict] = {
+            "white": _build_pp(params_white),
+            "black": _build_pp(params_black),
+        }
+        for piece in self.pieces:
+            piece.diameter = self._pp[piece.owner]["diameter_piece"]
         self.mana: dict[str, float] = {
-            "white": params.MAXIMUM_MANA * 0.8,
-            "black": params.MAXIMUM_MANA * 0.8,
+            "white": self._pp["white"]["maximum_mana"] * 0.8,
+            "black": self._pp["black"]["maximum_mana"] * 0.8,
         }
         self.tick: int = 0
         self.started: bool = False
@@ -50,13 +74,14 @@ class GameState:
             return _reject(piece_id, "piece not idle")
 
         dest_x, dest_y = dest
+        pp = self._pp[piece.owner]
 
-        reason = validate_move(piece, dest_x, dest_y, self.pieces)
+        reason = validate_move(piece, dest_x, dest_y, self.pieces, pp["movement_freedom_deg"])
         if reason:
             return _reject(piece_id, reason)
 
         dist = math.hypot(dest_x - piece.x, dest_y - piece.y)
-        cost = params.BASE_MOVE_COST + params.DISTANCE_COST * dist
+        cost = pp["base_move_cost"] + pp["distance_cost"] * dist
         mana_owner = piece.owner
 
         if self.mana[mana_owner] < cost:
@@ -104,9 +129,10 @@ class GameState:
 
         # 1. Regenerate mana.
         for owner in self.mana:
+            pp = self._pp[owner]
             self.mana[owner] = min(
-                self.mana[owner] + params.MANA_REFILL_RATE * dt,
-                params.MAXIMUM_MANA,
+                self.mana[owner] + pp["mana_refill_rate"] * dt,
+                pp["maximum_mana"],
             )
 
         # 2. Apply pending moves.
@@ -160,7 +186,11 @@ class GameState:
         piece.dest_x = move["dest_x"]
         piece.dest_y = move["dest_y"]
         piece.state = PieceState.PREPARATION
-        piece.state_timer = params.PREPARATION_PERIOD
+        pp = self._pp[piece.owner]
+        piece.state_timer = pp["preparation_period"]
+        piece.movement_speed = pp["movement_speed"]
+        piece.cooldown_duration = pp["cooldown"]
+        piece.freedom_deg = pp["movement_freedom_deg"]
 
         # Detect castling (king moves > 1 square sideways while unmoved).
         if piece.type == PieceType.KING and not piece.has_moved:
@@ -207,6 +237,7 @@ class GameState:
         if king_travel_time < 1e-9:
             return
 
+        rook_pp = self._pp[rook.owner]
         rook.dest_x = rook_dest_x
         rook.dest_y = rook.y
         rook.state = PieceState.MOVING
@@ -217,6 +248,9 @@ class GameState:
         rook.capture_remaining = 1
         rook.castling_partner_id = king.id
         king.castling_partner_id = rook.id
+        rook.movement_speed = rook_pp["movement_speed"]
+        rook.cooldown_duration = rook_pp["cooldown"]
+        rook.freedom_deg = rook_pp["movement_freedom_deg"]
 
     # ------------------------------------------------------------------
     # Promotions
@@ -224,10 +258,10 @@ class GameState:
 
     def _check_promotions(self) -> None:
         s = params.SQUARE_SIDE
-        r = params.DIAMETER_PIECE / 2.0
         for piece in self.pieces:
             if piece.type != PieceType.PAWN:
                 continue
+            r = piece.diameter / 2.0
             if piece.owner == "white" and piece.y - r < s:
                 piece.type = PieceType.QUEEN
             elif piece.owner == "black" and piece.y + r > 7.0 * s:
@@ -263,6 +297,7 @@ class GameState:
                 x=piece.x,
                 y=ghost_y,
             )
+            ghost.diameter = self._pp[ghost.owner]["diameter_piece"]
             self.pieces.append(ghost)
             self._ghost_map[ghost_id] = {"pawn_id": piece.id, "window_closed": False}
             piece.ghost_created = True
@@ -327,7 +362,7 @@ class GameState:
                        ghost: Piece) -> bool:
         if piece.type != PieceType.PAWN:
             return False
-        return math.hypot(ghost.x - dest_x, ghost.y - dest_y) < params.DIAMETER_PIECE
+        return math.hypot(ghost.x - dest_x, ghost.y - dest_y) < piece.diameter
 
     # ------------------------------------------------------------------
     # Win condition
@@ -362,10 +397,17 @@ class GameState:
             "tick": self.tick,
             "pieces": [p.to_dict() for p in self.pieces],
             "mana": {k: round(v, 3) for k, v in self.mana.items()},
-            "max_mana":    params.MAXIMUM_MANA,
-            "freedom_deg": params.MOVEMENT_FREEDOM_DEG,
-            "prep_period": params.PREPARATION_PERIOD,
-            "cooldown":    params.COOLDOWN,
+            "max_mana":    {c: self._pp[c]["maximum_mana"] for c in ("white", "black")},
+            "freedom_deg": {c: self._pp[c]["movement_freedom_deg"] for c in ("white", "black")},
+            "prep_period": {c: self._pp[c]["preparation_period"] for c in ("white", "black")},
+            "cooldown":    {c: self._pp[c]["cooldown"] for c in ("white", "black")},
+            "player_params": {
+                c: {
+                    "base_move_cost": self._pp[c]["base_move_cost"],
+                    "distance_cost":  self._pp[c]["distance_cost"],
+                }
+                for c in ("white", "black")
+            },
             "countdown": self.countdown,
             "game_over": self.game_over,
             "winner": self.winner,
