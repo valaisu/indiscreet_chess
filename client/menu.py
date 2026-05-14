@@ -6,6 +6,8 @@ import sys
 import threading
 import time
 
+import math
+
 import pygame
 
 from client.renderer import (
@@ -72,6 +74,9 @@ DISPLAY_DEFAULTS: dict = {
     "show_opp_timers": True,
     "drag_pieces":     False,
 }
+
+# Session-persistent copy — modified in-place by the settings screen.
+_persistent_display: dict = dict(DISPLAY_DEFAULTS)
 
 
 # ── LAN discovery ────────────────────────────────────────────────────────────
@@ -160,33 +165,17 @@ def _make_layout(win_w: int, win_h: int) -> dict:
 
 _MAX_SERVERS = 4  # max rows shown in join mode
 
-def _client_params_top_y(L: dict, mode: str) -> int:
-    """Y position of the first client-param row."""
+
+def _port_y(L: dict, mode: str) -> int:
     if mode == "join":
         base = L['s'](44) + _MAX_SERVERS * L['s'](36) + L['s'](8)
     else:
         base = len(_PARAMS) * L['row_h'] + L['s'](8)
-    return L['body_y'] + base
-
-
-def _display_top_y(L: dict, mode: str) -> int:
-    """Y position of the first display-toggle row."""
-    return _client_params_top_y(L, mode) + len(_CLIENT_PARAMS) * L['row_h'] + L['s'](8)
-
-
-def _port_y(L: dict, mode: str) -> int:
-    return _display_top_y(L, mode) + len(_DISPLAY) * L['row_h'] + L['s'](16)
+    return L['body_y'] + base + L['s'](16)
 
 
 def _start_y(L: dict, mode: str) -> int:
     return _port_y(L, mode) + L['s'](52)
-
-
-def _toggle_rect(L: dict, mode: str, idx: int) -> pygame.Rect:
-    ry  = _display_top_y(L, mode) + idx * L['row_h']
-    off = (L['row_h'] - L['btn_h']) // 2
-    tw  = max(L['btn_w'] + L['s'](24), L['s'](52))
-    return pygame.Rect(L['plus_x'], ry + off, tw, L['btn_h'])
 
 
 def _mode_rect(L: dict, i: int) -> pygame.Rect:
@@ -239,7 +228,7 @@ def run_menu(screen: pygame.Surface) -> dict:
 
     mode         = "solo"
     vals         = dict(DEFAULTS)
-    display_vals = dict(DISPLAY_DEFAULTS)
+    display_vals = _persistent_display
     ip           = "localhost"
     port         = "8765"
     focused      = None
@@ -304,6 +293,9 @@ def run_menu(screen: pygame.Surface) -> dict:
                 w, h = screen.get_size()
                 if fullscreen_btn_rect(w, h).collidepoint(mx, my):
                     pygame.display.toggle_fullscreen()
+                elif _settings_btn_rect(w, h).collidepoint(mx, my):
+                    _run_settings(screen, display_vals)
+                    refresh(*screen.get_size())
                 else:
                     focused = None
                     action  = _click(mx, my, mode, L, servers)
@@ -333,17 +325,14 @@ def run_menu(screen: pygame.Surface) -> dict:
                             "params":  vals,
                             "display": display_vals,
                         }
-                    elif action and action.startswith("toggle_"):
-                        key = action[len("toggle_"):]
-                        display_vals[key] = not display_vals.get(key, True)
                     elif action and action[0] in "+-":
                         direction = 1 if action[0] == "+" else -1
                         _adjust(vals, action[1:], direction)
-                        _adjust_client(display_vals, action[1:], direction)
 
         _draw(screen, fonts, mode, vals, display_vals, ip, port, focused, mx, my, L,
               servers, scanning)
         draw_fullscreen_btn(screen, bool(screen.get_flags() & pygame.FULLSCREEN), mx, my)
+        _draw_settings_btn(screen, mx, my)
         pygame.display.flip()
 
 
@@ -377,24 +366,6 @@ def _click(mx: int, my: int, mode: str, L: dict,
                 return f"-{key}"
             if pygame.Rect(plus_x,  ry + off, btn_w, btn_h).collidepoint(mx, my):
                 return f"+{key}"
-
-    cpt_y   = _client_params_top_y(L, mode)
-    row_h   = L['row_h']
-    btn_w   = L['btn_w']
-    btn_h   = L['btn_h']
-    minus_x = L['minus_x']
-    plus_x  = L['plus_x']
-    for idx, (_, key, *_rest) in enumerate(_CLIENT_PARAMS):
-        ry  = cpt_y + idx * row_h
-        off = (row_h - btn_h) // 2
-        if pygame.Rect(minus_x, ry + off, btn_w, btn_h).collidepoint(mx, my):
-            return f"-{key}"
-        if pygame.Rect(plus_x,  ry + off, btn_w, btn_h).collidepoint(mx, my):
-            return f"+{key}"
-
-    for idx, (_, key) in enumerate(_DISPLAY):
-        if _toggle_rect(L, mode, idx).collidepoint(mx, my):
-            return f"toggle_{key}"
 
     if _port_rect(L, mode).collidepoint(mx, my):
         return "focus_port"
@@ -498,54 +469,6 @@ def _draw(screen, fonts, mode, vals, display_vals, ip, port, focused, mx, my, L:
             t  = fonts['med'].render(sv, True, _C_TEXT)
             screen.blit(t, (val_x - t.get_width() // 2, cy - t.get_height() // 2))
 
-    # Client params section (all modes)
-    row_h   = L['row_h']
-    btn_w   = L['btn_w']
-    btn_h   = L['btn_h']
-    minus_x = L['minus_x']
-    plus_x  = L['plus_x']
-    val_x   = L['val_x']
-    cpt_y   = _client_params_top_y(L, mode)
-    sep_x1  = L['off_x'] + L['s'](80)
-    sep_x2  = L['win_w'] - sep_x1
-    pygame.draw.line(screen, _C_SEP,
-                     (sep_x1, cpt_y - L['s'](6)), (sep_x2, cpt_y - L['s'](6)))
-    for idx, (label, key, _lo, _hi, step) in enumerate(_CLIENT_PARAMS):
-        ry  = cpt_y + idx * row_h
-        cy2 = ry + row_h // 2
-        off = (row_h - btn_h) // 2
-        t = fonts['sml'].render(label, True, _C_TEXT)
-        screen.blit(t, (label_x, cy2 - t.get_height() // 2))
-        for bx_btn, lbl in ((minus_x, "−"), (plus_x, "+")):
-            r   = pygame.Rect(bx_btn, ry + off, btn_w, btn_h)
-            col = _C_BTN_H if r.collidepoint(mx, my) else _C_BTN
-            pygame.draw.rect(screen, col, r, border_radius=4)
-            t = fonts['med'].render(lbl, True, _C_TEXT)
-            screen.blit(t, (r.centerx - t.get_width() // 2,
-                            r.centery - t.get_height() // 2))
-        sv = _fmt(display_vals.get(key, CLIENT_DEFAULTS.get(key, 0.0)), step)
-        t  = fonts['med'].render(sv, True, _C_TEXT)
-        screen.blit(t, (val_x - t.get_width() // 2, cy2 - t.get_height() // 2))
-
-    # Display-toggle section
-    disp_y  = _display_top_y(L, mode)
-    pygame.draw.line(screen, _C_SEP,
-                     (sep_x1, disp_y - L['s'](6)), (sep_x2, disp_y - L['s'](6)))
-    for idx, (label, key) in enumerate(_DISPLAY):
-        ry   = disp_y + idx * row_h
-        cy2  = ry + row_h // 2
-        off  = (row_h - btn_h) // 2
-        t    = fonts['sml'].render(label, True, _C_TEXT)
-        screen.blit(t, (label_x, cy2 - t.get_height() // 2))
-        r    = _toggle_rect(L, mode, idx)
-        val  = display_vals.get(key, True)
-        base = (60, 140, 60) if val else _C_BTN
-        col  = ((90, 180, 90) if val else _C_BTN_H) if r.collidepoint(mx, my) else base
-        pygame.draw.rect(screen, col, r, border_radius=4)
-        lbl  = fonts['sml'].render("ON" if val else "OFF", True, _C_TEXT)
-        screen.blit(lbl, (r.centerx - lbl.get_width() // 2,
-                          r.centery - lbl.get_height() // 2))
-
     _draw_field(screen, fonts['med'], "Port:",
                 _port_rect(L, mode), port, focused == "port", mx, my, label_x)
 
@@ -573,3 +496,157 @@ def _draw_field(screen, font, label: str, rect: pygame.Rect,
     pygame.draw.rect(screen, border, rect, 1, border_radius=4)
     t = font.render(text, True, _C_TEXT)
     screen.blit(t, (rect.x + 8, rect.centery - t.get_height() // 2))
+
+
+# ── Settings screen ───────────────────────────────────────────────────────────
+
+def _settings_btn_rect(win_w: int, win_h: int) -> pygame.Rect:
+    return pygame.Rect(8, 8, 28, 28)
+
+
+def _draw_settings_btn(screen: pygame.Surface, mx: int, my: int) -> None:
+    r   = _settings_btn_rect(*screen.get_size())
+    col = _C_BTN_H if r.collidepoint(mx, my) else _C_BTN
+    pygame.draw.rect(screen, col, r, border_radius=4)
+    cx, cy = r.centerx, r.centery
+    rr = max(1, r.width // 2 - 4)
+    pygame.draw.circle(screen, _C_TEXT, (cx, cy), rr, 1)
+    for i in range(8):
+        angle = math.radians(i * 45)
+        x1 = cx + int((rr + 1) * math.cos(angle))
+        y1 = cy + int((rr + 1) * math.sin(angle))
+        x2 = cx + int((rr + 4) * math.cos(angle))
+        y2 = cy + int((rr + 4) * math.sin(angle))
+        pygame.draw.line(screen, _C_TEXT, (x1, y1), (x2, y2), 1)
+
+
+def _settings_toggle_rect(L: dict, idx: int) -> pygame.Rect:
+    ry  = L['body_y'] + L['row_h'] + idx * L['row_h']
+    off = (L['row_h'] - L['btn_h']) // 2
+    tw  = max(L['btn_w'] + L['s'](24), L['s'](52))
+    return pygame.Rect(L['plus_x'], ry + off, tw, L['btn_h'])
+
+
+def _settings_back_rect(L: dict) -> pygame.Rect:
+    s = L['s']
+    rows_below = 1 + len(_DISPLAY)  # snap margin row + toggle rows
+    return pygame.Rect(L['cx'] - s(60),
+                       L['body_y'] + rows_below * L['row_h'] + s(24),
+                       s(120), s(40))
+
+
+def _run_settings(screen: pygame.Surface, display_vals: dict) -> None:
+    """Blocking settings loop. Mutates display_vals in-place."""
+    fam      = "dejavusans,arial,sans-serif"
+    clock    = pygame.time.Clock()
+    cur_size = (0, 0)
+    L:     dict = {}
+    fonts: dict = {}
+
+    def refresh(w: int, h: int) -> None:
+        nonlocal L, cur_size
+        L        = _make_layout(w, h)
+        cur_size = (w, h)
+        fonts['big'] = pygame.font.SysFont(fam, L['f_big'])
+        fonts['med'] = pygame.font.SysFont(fam, L['f_med'])
+        fonts['sml'] = pygame.font.SysFont(fam, L['f_sml'])
+
+    refresh(*screen.get_size())
+
+    while True:
+        clock.tick(60)
+        win_size = screen.get_size()
+        if win_size != cur_size:
+            refresh(*win_size)
+
+        mx, my = pygame.mouse.get_pos()
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_F11:
+                    pygame.display.toggle_fullscreen()
+                elif event.key == pygame.K_ESCAPE:
+                    return
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if _settings_back_rect(L).collidepoint(mx, my):
+                    return
+                # Snap margin +/−
+                ry  = L['body_y']
+                off = (L['row_h'] - L['btn_h']) // 2
+                if pygame.Rect(L['minus_x'], ry + off, L['btn_w'], L['btn_h']).collidepoint(mx, my):
+                    _adjust_client(display_vals, "snap_margin", -1)
+                elif pygame.Rect(L['plus_x'], ry + off, L['btn_w'], L['btn_h']).collidepoint(mx, my):
+                    _adjust_client(display_vals, "snap_margin", 1)
+                # Toggles
+                for idx, (_, key) in enumerate(_DISPLAY):
+                    if _settings_toggle_rect(L, idx).collidepoint(mx, my):
+                        display_vals[key] = not display_vals.get(key, True)
+
+        _draw_settings(screen, fonts, display_vals, mx, my, L)
+        draw_fullscreen_btn(screen, bool(screen.get_flags() & pygame.FULLSCREEN), mx, my)
+        pygame.display.flip()
+
+
+def _draw_settings(screen: pygame.Surface, fonts: dict,
+                   display_vals: dict, mx: int, my: int, L: dict) -> None:
+    screen.fill(_C_BG)
+    cx      = L['cx']
+    label_x = L['label_x']
+    s       = L['s']
+    row_h   = L['row_h']
+    btn_w   = L['btn_w']
+    btn_h   = L['btn_h']
+    minus_x = L['minus_x']
+    plus_x  = L['plus_x']
+    val_x   = L['val_x']
+    body_y  = L['body_y']
+    sep_x1  = L['off_x'] + s(80)
+    sep_x2  = L['win_w'] - sep_x1
+
+    t = fonts['big'].render("Settings", True, (220, 220, 180))
+    screen.blit(t, (cx - t.get_width() // 2, L['title_y']))
+    pygame.draw.line(screen, _C_SEP, (sep_x1, L['sep_y']), (sep_x2, L['sep_y']))
+
+    # Snap margin row
+    _, key, _lo, _hi, step = _CLIENT_PARAMS[0]
+    ry  = body_y
+    cy  = ry + row_h // 2
+    off = (row_h - btn_h) // 2
+    t = fonts['sml'].render("Snap margin", True, _C_TEXT)
+    screen.blit(t, (label_x, cy - t.get_height() // 2))
+    for bx_btn, lbl in ((minus_x, "−"), (plus_x, "+")):
+        r   = pygame.Rect(bx_btn, ry + off, btn_w, btn_h)
+        col = _C_BTN_H if r.collidepoint(mx, my) else _C_BTN
+        pygame.draw.rect(screen, col, r, border_radius=4)
+        t = fonts['med'].render(lbl, True, _C_TEXT)
+        screen.blit(t, (r.centerx - t.get_width() // 2, r.centery - t.get_height() // 2))
+    sv = _fmt(display_vals.get(key, CLIENT_DEFAULTS[key]), step)
+    t  = fonts['med'].render(sv, True, _C_TEXT)
+    screen.blit(t, (val_x - t.get_width() // 2, cy - t.get_height() // 2))
+
+    # Toggle rows
+    pygame.draw.line(screen, _C_SEP,
+                     (sep_x1, body_y + row_h - s(6)), (sep_x2, body_y + row_h - s(6)))
+    for idx, (label, key) in enumerate(_DISPLAY):
+        ry2 = body_y + row_h + idx * row_h
+        cy2 = ry2 + row_h // 2
+        t   = fonts['sml'].render(label, True, _C_TEXT)
+        screen.blit(t, (label_x, cy2 - t.get_height() // 2))
+        r   = _settings_toggle_rect(L, idx)
+        val = display_vals.get(key, True)
+        base = (60, 140, 60) if val else _C_BTN
+        col  = ((90, 180, 90) if val else _C_BTN_H) if r.collidepoint(mx, my) else base
+        pygame.draw.rect(screen, col, r, border_radius=4)
+        lbl_s = fonts['sml'].render("ON" if val else "OFF", True, _C_TEXT)
+        screen.blit(lbl_s, (r.centerx - lbl_s.get_width() // 2,
+                            r.centery - lbl_s.get_height() // 2))
+
+    # Back button
+    r   = _settings_back_rect(L)
+    col = _C_BTN_H if r.collidepoint(mx, my) else _C_BTN
+    pygame.draw.rect(screen, col, r, border_radius=6)
+    t = fonts['med'].render("Back", True, _C_TEXT)
+    screen.blit(t, (r.centerx - t.get_width() // 2, r.centery - t.get_height() // 2))
