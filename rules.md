@@ -122,7 +122,7 @@ The Pawn has two diagonal capture landing zones, one for each diagonal forward d
 
 The player specifies any point inside one of these circles as the destination, subject to the legality constraint below.
 
-**Legality:** A destination point D is legal if and only if, at the moment the move is queued, at least one piece (friend or foe) has its center within `diameter_piece` of D — i.e. the Pawn's hitbox would overlap that piece upon landing. Only the portion of the circle satisfying this condition is available; the remainder is illegal. If no such piece exists anywhere near the circle, the move cannot be queued at all.
+**Legality:** A destination point D is legal if and only if, at the moment the move is queued, at least one **enemy** piece has its center within `diameter_piece` of D — i.e. the Pawn's hitbox would overlap that piece upon landing. Friendly pieces do not satisfy this condition. Only the portion of the circle satisfying this condition is available; the remainder is illegal. If no enemy piece exists anywhere near the circle, the move cannot be queued at all.
 
 **During travel:** While the Pawn is moving toward its diagonal destination it cannot capture and cannot be captured. It passes through all pieces without interaction and is never blocked.
 

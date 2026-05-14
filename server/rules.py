@@ -147,9 +147,9 @@ def _check_pawn(piece: Piece, dest_x: float, dest_y: float,
 
 def _piece_at_dest(dest_x: float, dest_y: float, pawn: Piece,
                    all_pieces: list[Piece]) -> bool:
-    """True if any piece (friend or foe) has its hitbox overlapping dest_x, dest_y."""
+    """True if any enemy piece has its hitbox overlapping dest_x, dest_y."""
     for other in all_pieces:
-        if other is pawn:
+        if other is pawn or other.owner == pawn.owner:
             continue
         if math.hypot(other.x - dest_x, other.y - dest_y) < params.DIAMETER_PIECE:
             return True

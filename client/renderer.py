@@ -371,6 +371,10 @@ class Renderer:
                 pygame.draw.circle(surf, C_HINT_ILLEGAL, (ccx_px, ccy_px), diag_r_px)
 
                 for other in state["pieces"]:
+                    if other.get("id") == piece.get("id"):
+                        continue
+                    if other.get("owner") == owner:
+                        continue
                     odx = other["x"] - ccx_b
                     ody = other["y"] - ccy_b
                     other_d = math.hypot(odx, ody)

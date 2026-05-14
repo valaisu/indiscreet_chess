@@ -218,7 +218,7 @@ def _snap_destination(bx: float, by: float, piece: dict,
             print(f"[snap]   pawn fwd={fwd:+.0f}  has_moved={piece.get('has_moved')}  max_fwd={max_fwd}")
         try_sector(0.0, fwd, min(max_fwd, board_max(0.0, fwd)))
 
-        # Diagonal capture circles (friend or foe target, like knight landing zones)
+        # Diagonal capture circles — only enemy pieces activate the valid arc
         diag_r = _SQRT2 * math.tan(freedom_rad)   # circle radius in board units
         if pieces is not None:
             for xdir in (-1.0, 1.0):
@@ -229,6 +229,8 @@ def _snap_destination(bx: float, by: float, piece: dict,
                 d_to_center = math.hypot(bx - ccx, by - ccy)
                 for other in pieces:
                     if other.get("id") == piece["id"]:
+                        continue
+                    if other.get("owner") == owner:
                         continue
                     other_d = math.hypot(other["x"] - ccx, other["y"] - ccy)
                     if other_d > diag_r + _DIAMETER_PIECE + 1e-6:
