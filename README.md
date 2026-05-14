@@ -1,5 +1,7 @@
 # Indiscreet Chess
 
+![Gameplay screenshot](images/snapshot_2.png)
+
 A real-time chess variant where both players move simultaneously on a continuous board. Instead of taking turns, you spend mana to queue moves and everything happens simultaneously.
 
 ## How It's Different From Regular Chess
