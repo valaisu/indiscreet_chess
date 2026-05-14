@@ -4,7 +4,7 @@ A real-time chess variant where both players move simultaneously on a continuous
 
 ## How It's Different From Regular Chess
 
-- **Real-time, not turn-based.** Both players act simultaneously. Timing matters.
+- **Real-time, not turn-based.** Both players act simultaneously.
 - **Mana economy.** Every move costs mana (base cost + distance). Mana regenerates over time. You share a pool of up to 5.0 mana.
 - **Continuous positions.** Pieces glide smoothly rather than snapping between squares.
 - **Capture by collision.** A moving piece captures an enemy when their hitboxes touch. If both pieces are moving when they collide, both are removed (mutual capture).
