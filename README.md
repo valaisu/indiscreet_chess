@@ -14,7 +14,7 @@ A real-time chess variant where both players move simultaneously on a continuous
 
 ### The Board and Pieces
 
-The board is a continuous 2D plane equivalent to an 8×8 grid. There are no discrete squares — pieces have circular hitboxes and can occupy any position. All distances and movements are fully continuous.
+The board is a continuous 2D plane equivalent to an 8×8 grid. There are no discrete squares, rather pieces have circular hitboxes and can occupy any position. All distances and movements are fully continuous.
 
 ### Mana
 
@@ -38,7 +38,7 @@ A new move can only be queued when the piece is idle (not in any phase) and you 
 - After capturing, a piece continues toward its original destination (stopping at the captured piece's perpendicular or the destination, whichever comes first).
 - Each piece can capture at most **one** enemy per move, except Knights and Pawns doing a diagonal capture.
 - A moving piece that would hit a friendly piece (or has already used its capture for this move) stops at the point of contact instead.
-- If a piece is captured during its preparation period, the queued move is cancelled — mana is not refunded.
+- If a piece is captured during its preparation period, the queued move is cancelled, and mana is not refunded.
 
 ### Piece Movement
 
@@ -46,7 +46,7 @@ A new move can only be queued when the piece is idle (not in any phase) and you 
 
 **King** — moves in any direction, up to 1 square orthogonally or √2 squares diagonally.
 
-**Pawn** — moves strictly forward, up to 1 square. Cannot capture pieces by moving forward — if it contacts any piece while moving forward, it stops. It can be captured by enemies moving into it.
+**Pawn** — moves strictly forward, up to 1 square. Cannot capture pieces by moving forward. If it contacts any piece while moving forward, it stops. It can be captured by enemies moving into it.
 
 **Knight** — jumps to one of 8 L-shaped zones. While in transit it cannot be captured and cannot capture. On arrival it captures **all** pieces (friend or foe) whose hitboxes overlap with it. If any of those pieces were moving at the moment of arrival, the Knight is also removed.
 
@@ -65,14 +65,14 @@ When a pawn executes a double move, it leaves a ghost at the point where it cros
 When a pawn's hitbox enters the last rank, it immediately promotes to a Queen. Any movement already in progress continues under Queen rules.
 
 **Castling**
-When neither the King nor a Rook has previously moved, the King can castle by moving 1–2 squares directly sideways toward that Rook. Both pieces begin moving simultaneously. The Rook is timed to arrive adjacent to the King's destination at the same moment the King arrives — they briefly overlap during transit. If either piece is blocked before the overlap begins, neither overlaps. If the Rook is blocked after that, the King continues until it contacts the stopped Rook. If the King is captured mid-castling, the game ends; if the Rook is captured, the King continues unaffected.
+When neither the King nor a Rook has previously moved, the King can castle by moving 1–2 squares directly sideways toward that Rook. Both pieces begin moving simultaneously. The Rook is timed to arrive adjacent to the King's destination at the same moment the King arrives causing them to briefly overlap during transit. If either piece is blocked before the overlap begins, neither overlaps. If the Rook is blocked after that, the King continues until it contacts the stopped Rook. If the Rook is captured, the King continues unaffected.
 
 ### Victory and Draw
 
 - Win by capturing the enemy King.
-- There is no check or checkmate — the King can move freely into danger.
+- There is no check or checkmate, the King is free to move into danger.
 - If two Kings capture each other simultaneously, the game is a draw.
-- A Knight that lands on its own King removes it — that player loses.
+- A Knight that lands on its own King removes it, losing the game.
 - There are no other draw conditions.
 
 ## Install
