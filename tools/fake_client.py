@@ -300,14 +300,18 @@ async def run_hostile(url: str) -> list[tuple[str, bool, str]]:
         results.append(("malformed json", reply.get("type") == protocol.ERROR,
                         reply.get("reason", "?")))
 
-    # Flood: the server should close the socket rather than fall over.
+    # Flood: the server should close the socket rather than fall over. Poll for
+    # the close instead of assuming one fixed delay, which a WAN round trip and
+    # the server's own close handling can easily exceed.
     try:
         async with websockets.connect(url) as ws:
             for _ in range(200):
                 await ws.send(json.dumps({"type": protocol.PING, "t": 0}))
-            await asyncio.sleep(1.0)
-            await ws.send(json.dumps({"type": protocol.PING, "t": 0}))
-            results.append(("flood closed", False, "still open"))
+            deadline = asyncio.get_event_loop().time() + 8
+            while asyncio.get_event_loop().time() < deadline:
+                await asyncio.sleep(0.25)
+                await ws.send(json.dumps({"type": protocol.PING, "t": 0}))
+            results.append(("flood closed", False, "still open after 8s"))
     except websockets.exceptions.ConnectionClosed:
         results.append(("flood closed", True, "connection closed"))
 

@@ -73,10 +73,15 @@ See `online_plan.md` for the full plan and the rationale behind each choice.
 - [x] Auto-rejoin when a backgrounded tab wakes
 - [x] Room codes in the URL fragment for shareable links
 
-### Part 9 — Deployment [config written, not deployed]
-- [x] Dockerfile (python:3.12-slim, websockets only — no pygame)
-- [x] fly.toml pinned to one machine (rooms are in-memory)
-- [ ] Actually deploy: needs Fly and Cloudflare credentials
+### Part 9 — Deployment [server live]
+- [x] Dockerfile (python:3.12-slim, websockets only — no pygame). 43 MB image.
+- [x] Server deployed: wss://indiscreet-chess-valaisu.fly.dev
+- [x] Verified over wss: concurrent rooms, forfeit on disconnect, hostile input
+- [ ] Client on Cloudflare Pages: needs a Cloudflare login
+- [ ] Set --origin on the server once the Pages domain exists
+
+Deploy with `fly deploy --remote-only --ha=false`. Without `--ha=false` Fly
+adds a second machine, which would split rooms across two processes.
 
 ### Testing
 - `tools/fake_client.py` — headless client: concurrent rooms, forfeit on

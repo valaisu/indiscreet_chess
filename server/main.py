@@ -174,7 +174,11 @@ class Hub:
                 window_count += 1
                 if window_count > MAX_MSG_PER_SEC:
                     log.warning("flood from %s, closing", ip)
-                    await ws.close(1008, "message rate exceeded")
+                    # close() waits for the peer's half of the handshake, which
+                    # a flooding client never sends — that would pin this task
+                    # and its connection slot for the full close timeout. Send
+                    # the frame and drop the connection now instead.
+                    asyncio.create_task(ws.close(1008, "message rate exceeded"))
                     break
 
                 try:
@@ -251,6 +255,7 @@ async def main() -> None:
     async with serve(hub.handle, args.host, args.port,
                      process_request=process_request,
                      origins=origins,
+                     close_timeout=5,
                      max_size=MAX_MESSAGE_BYTES):
         log.info("listening on %s:%d", args.host, args.port)
         await hub.rooms.gc_loop()

@@ -1,6 +1,9 @@
 # Rooms live in memory, so this app must never run more than one machine:
 # a second instance would strand the two halves of a game in separate worlds.
-app = "indiscreet-chess"
+# min_machines_running does not prevent that — Fly adds a second machine for
+# high availability unless you deploy with --ha=false:
+#   fly deploy --remote-only --ha=false
+app = "indiscreet-chess-valaisu"
 primary_region = "arn"
 
 [build]
