@@ -4,4 +4,5 @@ __pycache__/
 *.pyo
 .env
 .claude/
-CLAUDE.md
+CLAUDE.mdnode_modules/
+web/dist/
