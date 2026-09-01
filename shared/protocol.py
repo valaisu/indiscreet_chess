@@ -1,3 +1,4 @@
+# --- In-game messages (unchanged) ---
 HELLO = "HELLO"
 READY = "READY"
 QUEUE_MOVE = "QUEUE_MOVE"
@@ -6,7 +7,29 @@ MOVE_REJECTED = "MOVE_REJECTED"
 GAME_OVER = "GAME_OVER"
 ERROR = "ERROR"
 
+# --- LAN discovery (local play only; unused online) ---
 DISCOVER = "DISCOVER"
 ANNOUNCE = "ANNOUNCE"
 
 DISCOVERY_PORT = 8766
+
+# --- Lobby messages ---
+# Client -> server
+CREATE_ROOM = "CREATE_ROOM"
+JOIN_ROOM = "JOIN_ROOM"
+QUICK_MATCH = "QUICK_MATCH"
+REJOIN = "REJOIN"
+LEAVE_ROOM = "LEAVE_ROOM"
+PING = "PING"
+
+# Server -> client
+ROOM_CREATED = "ROOM_CREATED"
+ROOM_JOINED = "ROOM_JOINED"
+ROOM_STATE = "ROOM_STATE"
+OPPONENT_LEFT = "OPPONENT_LEFT"
+OPPONENT_REJOINED = "OPPONENT_REJOINED"
+PONG = "PONG"
+
+# Room codes use an alphabet without visually ambiguous characters.
+CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+CODE_LENGTH = 4

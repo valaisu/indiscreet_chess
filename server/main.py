@@ -1,203 +1,263 @@
 """
 WebSocket server entry point.
 
-Run from the project root:
-    python -m server.main [--solo] [--port PORT]
+Hosts many concurrent games in one process. Run from the project root:
 
---solo   One client controls both colors (for local testing without a second window).
+    python -m server.main [--port PORT] [--origin https://example.com]
+
+Clients create or join rooms over the lobby protocol; see shared/protocol.py.
 """
 
 import argparse
 import asyncio
+import http
 import json
-import socket
-import sys
+import logging
+import time
 
 import websockets
-import websockets.exceptions
+from websockets.asyncio.server import serve
 
-from . import params
-from .game import GameState
+from . import params, room as room_mod
+from .room import Connection, RoomManager, RUNNING
 from shared import protocol
 
+log = logging.getLogger("server")
 
-class Server:
-    def __init__(self, solo: bool,
-                 params_white: dict | None = None,
-                 params_black: dict | None = None) -> None:
-        self.solo = solo
-        self.game = GameState(solo=solo, params_white=params_white, params_black=params_black)
-        # Maps color -> websocket. In solo mode both entries point to same ws.
-        self.clients: dict[str, any] = {}
-        self._ready = asyncio.Event()
+MAX_CONN_PER_IP = 5
+MAX_MSG_PER_SEC = 40
+MAX_MESSAGE_BYTES = 4096
 
-    async def handle_client(self, ws) -> None:
+
+class Hub:
+    def __init__(self) -> None:
+        self.rooms = RoomManager()
+        self.conns: set[Connection] = set()
+
+    def conns_from(self, ip: str) -> int:
+        return sum(1 for c in self.conns if c.ip == ip)
+
+    # -- message handlers ---------------------------------------------------
+
+    async def on_create(self, conn: Connection, msg: dict) -> None:
+        if conn.room is not None:
+            await conn.error("already in a room")
+            return
+        room = await self.rooms.create(conn, msg)
+        if room is None:
+            return
+        await conn.send({
+            "type":  protocol.ROOM_CREATED,
+            "code":  room.code,
+            "color": conn.color,
+            "token": conn.token,
+            "solo":  room.solo,
+        })
+        if room.solo:
+            room.start_if_ready()
+        else:
+            await room.notify_state()
+
+    async def on_join(self, conn: Connection, msg: dict) -> None:
+        if conn.room is not None:
+            await conn.error("already in a room")
+            return
+        code = str(msg.get("code", "")).strip().upper()
+        room = await self.rooms.join(conn, code)
+        if room is None:
+            return
+        await conn.send({
+            "type":  protocol.ROOM_JOINED,
+            "code":  room.code,
+            "color": conn.color,
+            "token": conn.token,
+        })
+        await room.notify_state()
+        room.start_if_ready()
+
+    async def on_quick_match(self, conn: Connection, msg: dict) -> None:
+        if conn.room is not None:
+            await conn.error("already in a room")
+            return
+        room = await self.rooms.quick_match(conn, msg)
+        if room is None:
+            return
+        await conn.send({
+            "type":  protocol.ROOM_JOINED,
+            "code":  room.code,
+            "color": conn.color,
+            "token": conn.token,
+        })
+        await room.notify_state()
+        room.start_if_ready()
+
+    async def on_rejoin(self, conn: Connection, msg: dict) -> None:
+        code  = str(msg.get("code", "")).strip().upper()
+        token = str(msg.get("token", ""))
+        color = self.rooms.find_rejoin(code, token)
+        if color is None:
+            await conn.error("cannot rejoin")
+            return
+        room = self.rooms.rooms[code]
+        conn.token = token
+        await room.rejoin(conn, color)
+        await conn.send({
+            "type":  protocol.ROOM_JOINED,
+            "code":  room.code,
+            "color": color,
+            "token": token,
+        })
+        log.info("room %s: %s rejoined", code, color)
+
+    async def on_queue_move(self, conn: Connection, msg: dict) -> None:
+        room = conn.room
+        if room is None or room.state != RUNNING:
+            return
+        if not conn.allow_move():
+            return                      # silently drop; a real client can't hit this
+        dest = msg.get("destination") or [0.0, 0.0]
         try:
-            # --- Handshake: HELLO ---
-            raw = await ws.recv()
-            msg = json.loads(raw)
-            if msg.get("type") != protocol.HELLO:
-                await ws.close()
-                return
+            dx, dy = float(dest[0]), float(dest[1])
+        except (TypeError, ValueError, IndexError):
+            await conn.error("bad destination")
+            return
+        rejection = room.game.queue_move(str(msg.get("piece_id", "")), (dx, dy),
+                                         conn.color or "white")
+        if rejection:
+            await conn.send(rejection)
 
-            color = msg.get("player_id", "white")
-            if color not in ("white", "black"):
-                await ws.send(json.dumps({"type": protocol.ERROR,
-                                          "reason": "player_id must be white or black"}))
-                await ws.close()
-                return
+    async def on_leave(self, conn: Connection, msg: dict) -> None:
+        if conn.room is not None:
+            await conn.room.on_disconnect(conn)
+            self.rooms.sweep()
+            conn.room = None
+            conn.color = None
 
-            if self.solo:
-                self.clients["white"] = ws
-                self.clients["black"] = ws
-                print(f"[server] Solo client connected.")
-                self._ready.set()
-            else:
-                if color in self.clients:
-                    await ws.send(json.dumps({"type": protocol.ERROR,
-                                              "reason": f"{color} slot already taken"}))
-                    await ws.close()
-                    return
-                self.clients[color] = ws
-                print(f"[server] {color} connected ({len(self.clients)}/2).")
-                if len(self.clients) == 2:
-                    self._ready.set()
+    async def dispatch(self, conn: Connection, msg: dict) -> None:
+        kind = msg.get("type")
+        if kind == protocol.QUEUE_MOVE:
+            await self.on_queue_move(conn, msg)
+        elif kind == protocol.CREATE_ROOM:
+            await self.on_create(conn, msg)
+        elif kind == protocol.JOIN_ROOM:
+            await self.on_join(conn, msg)
+        elif kind == protocol.QUICK_MATCH:
+            await self.on_quick_match(conn, msg)
+        elif kind == protocol.REJOIN:
+            await self.on_rejoin(conn, msg)
+        elif kind == protocol.LEAVE_ROOM:
+            await self.on_leave(conn, msg)
+        elif kind == protocol.PING:
+            await conn.send({"type": protocol.PONG, "t": msg.get("t"),
+                             "server_time": time.time()})
+        else:
+            await conn.error(f"unknown message type: {kind}")
 
-            # --- Handshake: READY ---
-            raw = await ws.recv()
-            # Just consume it; game starts when _ready fires.
+    # -- connection lifecycle -----------------------------------------------
 
-            # --- Main message loop ---
+    async def handle(self, ws) -> None:
+        ip = client_ip(ws)
+        if self.conns_from(ip) >= MAX_CONN_PER_IP:
+            log.warning("refusing connection from %s: too many", ip)
+            await ws.close(1008, "too many connections")
+            return
+
+        conn = Connection(ws, ip)
+        self.conns.add(conn)
+        window_start, window_count = time.monotonic(), 0
+
+        try:
             async for raw in ws:
-                msg = json.loads(raw)
-                if msg.get("type") == protocol.QUEUE_MOVE:
-                    piece_id = msg.get("piece_id", "")
-                    dest = msg.get("destination", [0.0, 0.0])
-                    rejection = self.game.queue_move(piece_id, tuple(dest), color)
-                    if rejection:
-                        await ws.send(json.dumps(rejection))
+                now = time.monotonic()
+                if now - window_start >= 1.0:
+                    window_start, window_count = now, 0
+                window_count += 1
+                if window_count > MAX_MSG_PER_SEC:
+                    log.warning("flood from %s, closing", ip)
+                    await ws.close(1008, "message rate exceeded")
+                    break
+
+                try:
+                    msg = json.loads(raw)
+                except (ValueError, TypeError):
+                    await conn.error("malformed json")
+                    continue
+                if not isinstance(msg, dict):
+                    await conn.error("message must be an object")
+                    continue
+
+                await self.dispatch(conn, msg)
 
         except websockets.exceptions.ConnectionClosed:
-            print(f"[server] Client disconnected.")
-        except Exception as exc:
-            print(f"[server] Handler error: {exc}", file=sys.stderr)
-
-    async def broadcast(self, state: dict) -> None:
-        data = json.dumps(state)
-        sent: set[int] = set()
-        for ws in self.clients.values():
-            ws_id = id(ws)
-            if ws_id in sent:
-                continue
-            sent.add(ws_id)
-            try:
-                await ws.send(data)
-            except Exception:
-                pass
-
-    async def run_game(self) -> None:
-        print("[server] Waiting for players...")
-        await self._ready.wait()
-        print("[server] Starting game.")
-        await self.game.run(self.broadcast)
-        print(f"[server] Game over. Winner: {self.game.winner}")
-
-
-class DiscoveryProtocol(asyncio.DatagramProtocol):
-    def __init__(self, ws_port: int, server: "Server") -> None:
-        self._ws_port = ws_port
-        self._server  = server
-        self._transport = None
-
-    def connection_made(self, transport) -> None:
-        self._transport = transport
-
-    def datagram_received(self, data: bytes, addr) -> None:
-        try:
-            msg = json.loads(data)
+            pass
         except Exception:
-            return
-        if msg.get("type") != protocol.DISCOVER:
-            return
-        waiting = not self._server._ready.is_set()
-        reply = json.dumps({
-            "type":    protocol.ANNOUNCE,
-            "port":    self._ws_port,
-            "name":    socket.gethostname(),
-            "waiting": waiting,
-        }).encode()
-        self._transport.sendto(reply, addr)
+            log.exception("handler error for %s", ip)
+        finally:
+            self.conns.discard(conn)
+            if conn.room is not None:
+                await conn.room.on_disconnect(conn)
+                self.rooms.sweep()
 
 
-async def _run_discovery(ws_port: int, server: "Server") -> None:
-    loop = asyncio.get_running_loop()
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("", protocol.DISCOVERY_PORT))
-    sock.setblocking(False)
-    await loop.create_datagram_endpoint(
-        lambda: DiscoveryProtocol(ws_port, server),
-        sock=sock,
-    )
-    print(f"[server] Discovery listening on UDP :{protocol.DISCOVERY_PORT}")
-    await asyncio.Event().wait()
+def client_ip(ws) -> str:
+    """Real client address, honouring the proxy header set by Caddy/Fly."""
+    fwd = ws.request.headers.get("X-Forwarded-For") if ws.request else None
+    if fwd:
+        return fwd.split(",")[0].strip()
+    addr = ws.remote_address
+    return addr[0] if addr else "?"
 
 
 async def main() -> None:
+    global MAX_CONN_PER_IP
     parser = argparse.ArgumentParser(description="Indiscreet Chess server")
-    parser.add_argument("--solo",        action="store_true")
-    parser.add_argument("--host",        default=params.SERVER_HOST)
-    parser.add_argument("--port",        type=int,   default=params.SERVER_PORT)
-    # Shared params (apply to both players when no per-player override)
-    parser.add_argument("--mana-refill", type=float, default=params.MANA_REFILL_RATE)
-    parser.add_argument("--max-mana",    type=float, default=params.MAXIMUM_MANA)
-    parser.add_argument("--base-cost",   type=float, default=params.BASE_MOVE_COST)
-    parser.add_argument("--dist-cost",   type=float, default=params.DISTANCE_COST)
-    parser.add_argument("--prep",        type=float, default=params.PREPARATION_PERIOD)
-    parser.add_argument("--speed",       type=float, default=params.MOVEMENT_SPEED)
-    parser.add_argument("--cooldown",    type=float, default=params.COOLDOWN)
-    parser.add_argument("--freedom",     type=float, default=params.MOVEMENT_FREEDOM_DEG)
-    parser.add_argument("--diameter",    type=float, default=params.DIAMETER_PIECE)
-    # Per-player overrides (used in handicap mode)
-    for _color in ("white", "black"):
-        parser.add_argument(f"--{_color}-mana-refill", type=float, default=None)
-        parser.add_argument(f"--{_color}-max-mana",    type=float, default=None)
-        parser.add_argument(f"--{_color}-base-cost",   type=float, default=None)
-        parser.add_argument(f"--{_color}-dist-cost",   type=float, default=None)
-        parser.add_argument(f"--{_color}-prep",        type=float, default=None)
-        parser.add_argument(f"--{_color}-speed",       type=float, default=None)
-        parser.add_argument(f"--{_color}-cooldown",    type=float, default=None)
-        parser.add_argument(f"--{_color}-freedom",     type=float, default=None)
-        parser.add_argument(f"--{_color}-diameter",    type=float, default=None)
+    parser.add_argument("--host", default=params.SERVER_HOST)
+    parser.add_argument("--port", type=int, default=params.SERVER_PORT)
+    parser.add_argument("--origin", action="append", default=None,
+                        help="allowed Origin; repeatable. Omit to allow any "
+                             "(local development only).")
+    parser.add_argument("--grace", type=float, default=room_mod.DISCONNECT_GRACE,
+                        help="seconds a disconnected player may be gone before "
+                             "forfeiting")
+    parser.add_argument("--max-conn-per-ip", type=int, default=MAX_CONN_PER_IP,
+                        help="raise for local load testing, where every client "
+                             "shares one address")
+    parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
-    def _make_pp(color: str) -> dict:
-        def _g(attr: str, base: float) -> float:
-            v = getattr(args, f"{color}_{attr}", None)
-            return v if v is not None else base
-        return {
-            "mana_refill_rate":     _g("mana_refill", args.mana_refill),
-            "maximum_mana":         _g("max_mana",    args.max_mana),
-            "base_move_cost":       _g("base_cost",   args.base_cost),
-            "distance_cost":        _g("dist_cost",   args.dist_cost),
-            "preparation_period":   _g("prep",        args.prep),
-            "movement_speed":       _g("speed",       args.speed),
-            "cooldown":             _g("cooldown",    args.cooldown),
-            "movement_freedom_deg": _g("freedom",     args.freedom),
-            "diameter_piece":       _g("diameter",    args.diameter),
-        }
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(name)s  %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
-    server = Server(solo=args.solo,
-                    params_white=_make_pp("white"),
-                    params_black=_make_pp("black"))
-    print(f"[server] Listening on {args.host}:{args.port} "
-          f"({'solo' if args.solo else 'multiplayer'})")
+    MAX_CONN_PER_IP = args.max_conn_per_ip
+    room_mod.DISCONNECT_GRACE = args.grace
 
-    async with websockets.serve(server.handle_client, args.host, args.port):
-        async with asyncio.TaskGroup() as tg:
-            tg.create_task(server.run_game())
-            tg.create_task(_run_discovery(args.port, server))
+    hub = Hub()
+
+    def process_request(connection, request):
+        if request.path == "/health":
+            body = json.dumps(hub.rooms.stats() | {"connections": len(hub.conns)})
+            return connection.respond(http.HTTPStatus.OK, body + "\n")
+        return None
+
+    origins = args.origin if args.origin else None
+    if origins:
+        log.info("restricting Origin to: %s", ", ".join(origins))
+    else:
+        log.warning("no --origin set: accepting connections from any origin")
+
+    async with serve(hub.handle, args.host, args.port,
+                     process_request=process_request,
+                     origins=origins,
+                     max_size=MAX_MESSAGE_BYTES):
+        log.info("listening on %s:%d", args.host, args.port)
+        await hub.rooms.gc_loop()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
