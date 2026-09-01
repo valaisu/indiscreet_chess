@@ -60,6 +60,10 @@ export class Net {
     });
   }
 
+  isClosed(): boolean {
+    return !this.ws || this.ws.readyState > WebSocket.OPEN;
+  }
+
   send(msg: object): void {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
   }

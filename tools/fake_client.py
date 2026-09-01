@@ -65,9 +65,25 @@ class FakeClient:
         self.ws = None
 
     async def send(self, msg: dict) -> None:
-        await self.ws.send(json.dumps(msg))
+        try:
+            await self.ws.send(json.dumps(msg))
+        except websockets.exceptions.ConnectionClosed as exc:
+            self.errors.append(f"closed: {exc.rcvd.reason if exc.rcvd else exc}")
+            self.room_ready.set()
+            self.game_over.set()
 
     async def run(self, action: str, code: str | None, duration: float) -> None:
+        try:
+            await self._run(action, code, duration)
+        except websockets.exceptions.ConnectionClosed as exc:
+            self.errors.append(f"closed: {exc.rcvd.reason if exc.rcvd else exc}")
+        except OSError as exc:
+            self.errors.append(f"connect failed: {exc}")
+        finally:
+            self.room_ready.set()
+            self.game_over.set()
+
+    async def _run(self, action: str, code: str | None, duration: float) -> None:
         async with websockets.connect(self.url) as ws:
             self.ws = ws
             if action == "create":
@@ -138,7 +154,11 @@ async def run_pair(url: str, duration: float, index: int) -> dict:
     host_task = asyncio.create_task(host.run("create", None, duration))
     await asyncio.wait_for(host.room_ready.wait(), timeout=5)
     if host.code is None:
-        return {"ok": False, "why": f"no room code: {host.errors}"}
+        await host_task
+        why = "; ".join(host.errors) or "no reply"
+        if "too many connections" in why:
+            why += "  (raise the server's --max-conn-per-ip for local load tests)"
+        return {"ok": False, "why": f"room {index}: {why}"}
 
     guest_task = asyncio.create_task(guest.run("join", host.code, duration))
     await asyncio.gather(host_task, guest_task)
@@ -317,6 +337,9 @@ async def amain() -> int:
         for r in results:
             status = "PASS" if r["ok"] else "FAIL"
             failed |= not r["ok"]
+            if not r["ok"] and "why" in r:
+                print(f"[{status}] {r['why']}")
+                continue
             print(f"[{status}] room {r.get('code')} colors={r.get('colors')} "
                   f"ticks={r.get('ticks')} moves={r.get('moves_sent')} "
                   f"rejected={r.get('rejected')} winner={r.get('winner')} "

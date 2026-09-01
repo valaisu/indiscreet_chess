@@ -29,6 +29,7 @@ export interface GameState {
   freedom_deg: Record<string, number> | number;
   prep_period: Record<string, number> | number;
   cooldown: Record<string, number> | number;
+  player_params?: Record<string, { base_move_cost: number; distance_cost: number }>;
   countdown: number | null;
   game_over: boolean;
   winner: string | null;

@@ -216,7 +216,7 @@ export function snapDestination(
 }
 
 /** Mirrors _check_castling in server/rules.py. */
-function canCastle(king: Piece, dx: number, pieces: Piece[] | null): boolean {
+export function canCastle(king: Piece, dx: number, pieces: Piece[] | null): boolean {
   if (king.has_moved || pieces === null) return false;
   const rookX = (dx > 0 ? 7 : 0) + 0.5;
   return pieces.some(

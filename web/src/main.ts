@@ -29,6 +29,9 @@ let renderer: Renderer;
 let state: GameState | null = null;
 let stateAt = 0;
 let selectedId: string | null = null;
+let dragId: string | null = null;
+let dragPos: [number, number] | null = null;
+let dragWasSelected = false;
 
 function setStatus(text: string, isError = false): void {
   statusEl.textContent = text;
@@ -112,47 +115,90 @@ function enterGame(): void {
 
 // --- input ------------------------------------------------------------------
 
+function playable(): boolean {
+  return !!state && !state.game_over && state.countdown === null;
+}
+
+/** Try to move `sel` to the click; true if the move was sent. */
+function tryMove(sel: Piece, bx: number, by: number): boolean {
+  const freedom = perOwner(state!.freedom_deg, sel.owner, 5.0);
+  const snap = snapDestination(bx, by, sel, freedom, state!.pieces);
+  if (!Number.isFinite(snap.d) || snap.d > MOVE_SNAP_MAX) return false;
+  net.queueMove(sel.id, snap.x, snap.y);
+  return true;
+}
+
 function onPointerDown(ev: PointerEvent): void {
-  if (!state || state.game_over || state.countdown !== null) return;
+  if (!playable()) return;
   const [bx, by] = renderer.pxToBoard(ev.clientX, ev.clientY);
   if (!(bx >= 0 && bx < 8 && by >= 0 && by < 8)) return;
 
-  const pieces = state.pieces;
+  const pieces = state!.pieces;
   const solo = net.color === null;
+  const mine = (p: Piece) => solo || p.owner === net.color;
 
-  if (selectedId === null) {
-    const clicked = findPieceAt(bx, by, pieces, CLICK_R_SELECT);
-    if (clicked && clicked.state === "idle" && (solo || clicked.owner === net.color)) {
-      selectedId = clicked.id;
+  // Picking up an own idle piece starts a drag; the same press also selects it,
+  // so releasing in place leaves the click-click flow intact.
+  const grabbed = findPieceAt(bx, by, pieces, CLICK_R_SELECT);
+  if (grabbed && grabbed.state === "idle" && mine(grabbed)) {
+    if (selectedId !== null && selectedId !== grabbed.id) {
+      const sel = pieces.find((p) => p.id === selectedId);
+      // A precise click on a friendly piece switches rather than moves.
+      const precise = findPieceAt(bx, by, pieces, CLICK_R_SWITCH);
+      if (sel && !precise && tryMove(sel, bx, by)) {
+        selectedId = null;
+        return;
+      }
     }
+    dragWasSelected = selectedId === grabbed.id;
+    dragId = grabbed.id;
+    dragPos = [ev.clientX, ev.clientY];
+    selectedId = grabbed.id;
+    canvas.setPointerCapture(ev.pointerId);
     return;
   }
 
-  const clicked = findPieceAt(bx, by, pieces, CLICK_R_SWITCH);
-  if (clicked && clicked.id === selectedId) {
-    selectedId = null; // click the selected piece again to drop it
+  if (selectedId !== null) {
+    const sel = pieces.find((p) => p.id === selectedId);
+    if (sel && tryMove(sel, bx, by)) selectedId = null;
+  }
+}
+
+function onPointerMove(ev: PointerEvent): void {
+  if (dragId !== null) dragPos = [ev.clientX, ev.clientY];
+}
+
+function onPointerUp(ev: PointerEvent): void {
+  if (dragId === null || !state) return;
+  const id = dragId;
+  dragId = null;
+  dragPos = null;
+
+  const sel = state.pieces.find((p) => p.id === id);
+  if (!sel) {
+    selectedId = null;
     return;
   }
-  const sel = pieces.find((p) => p.id === selectedId);
-  if (clicked && sel && clicked.state === "idle" && clicked.owner === sel.owner) {
-    selectedId = clicked.id; // precise click on a friendly piece switches
+  const [bx, by] = renderer.pxToBoard(ev.clientX, ev.clientY);
+  const movedFar = Math.hypot(bx - sel.x, by - sel.y) > CLICK_R_SWITCH;
+
+  if (!movedFar) {
+    // Released where it started: a plain click. Toggles the selection.
+    if (dragWasSelected) selectedId = null;
     return;
   }
-  if (sel) {
-    const freedom = perOwner(state.freedom_deg, sel.owner, 5.0);
-    const snap = snapDestination(bx, by, sel as Piece, freedom, pieces);
-    if (Number.isFinite(snap.d) && snap.d <= MOVE_SNAP_MAX) {
-      net.queueMove(selectedId, snap.x, snap.y);
-      selectedId = null;
-    }
+  if (bx >= 0 && bx < 8 && by >= 0 && by < 8 && tryMove(sel, bx, by)) {
+    selectedId = null;
   }
+  // Otherwise keep it selected so the click-click flow can still be used.
 }
 
 // --- render loop ------------------------------------------------------------
 
 function frame(): void {
   if (state && renderer) {
-    renderer.render(interpolate(state, performance.now() - stateAt), selectedId, net.rtt);
+    renderer.render(interpolate(state, performance.now() - stateAt), selectedId,
+                    net.rtt, dragId, dragPos);
   }
   requestAnimationFrame(frame);
 }
@@ -181,9 +227,31 @@ $("btn-solo").addEventListener("click", async () => {
 });
 
 canvas.addEventListener("pointerdown", onPointerDown);
+canvas.addEventListener("pointermove", onPointerMove);
+canvas.addEventListener("pointerup", onPointerUp);
+canvas.addEventListener("pointercancel", () => {
+  dragId = null;
+  dragPos = null;
+});
 canvas.addEventListener("contextmenu", (e) => {
   e.preventDefault();
   selectedId = null;
+  dragId = null;
+  dragPos = null;
+});
+
+// Mobile browsers suspend sockets on backgrounding, so reclaim the seat on
+// wake rather than letting the grace window run out.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible" || !net) return;
+  if (!net.isClosed()) return;
+  const saved = sessionStorage.getItem("seat");
+  if (!saved) return;
+  const { code, token } = JSON.parse(saved);
+  net
+    .connect()
+    .then(() => net.rejoin(code, token))
+    .catch(() => showBanner("Reconnect failed"));
 });
 window.addEventListener("resize", () => renderer?.resize());
 window.addEventListener("keydown", (e) => {
