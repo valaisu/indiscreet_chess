@@ -13,6 +13,7 @@ import asyncio
 import http
 import json
 import logging
+import os
 import time
 
 import websockets
@@ -218,7 +219,10 @@ async def main() -> None:
     parser.add_argument("--host", default=params.SERVER_HOST)
     parser.add_argument("--port", type=int, default=params.SERVER_PORT)
     parser.add_argument("--origin", action="append", default=None,
-                        help="allowed Origin; repeatable. Omit to allow any "
+                        help="allowed Origin; repeatable. Defaults to the "
+                             "comma-separated ALLOWED_ORIGINS env var, which "
+                             "lets the deployment set it without rebuilding "
+                             "the image. Omit both to allow any origin "
                              "(local development only).")
     parser.add_argument("--grace", type=float, default=room_mod.DISCONNECT_GRACE,
                         help="seconds a disconnected player may be gone before "
@@ -246,7 +250,10 @@ async def main() -> None:
             return connection.respond(http.HTTPStatus.OK, body + "\n")
         return None
 
-    origins = args.origin if args.origin else None
+    origins = args.origin
+    if not origins:
+        env_origins = os.environ.get("ALLOWED_ORIGINS", "")
+        origins = [o.strip() for o in env_origins.split(",") if o.strip()] or None
     if origins:
         log.info("restricting Origin to: %s", ", ".join(origins))
     else:

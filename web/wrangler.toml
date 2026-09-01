@@ -1,0 +1,7 @@
+# Static hosting for the client. Cloudflare now steers new projects to Workers
+# static assets rather than Pages; both are free for a site this size.
+name = "indiscreet-chess"
+compatibility_date = "2026-01-01"
+
+[assets]
+directory = "./dist"

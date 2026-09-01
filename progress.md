@@ -73,12 +73,16 @@ See `online_plan.md` for the full plan and the rationale behind each choice.
 - [x] Auto-rejoin when a backgrounded tab wakes
 - [x] Room codes in the URL fragment for shareable links
 
-### Part 9 — Deployment [server live]
+### Part 9 — Deployment [live]
 - [x] Dockerfile (python:3.12-slim, websockets only — no pygame). 43 MB image.
-- [x] Server deployed: wss://indiscreet-chess-valaisu.fly.dev
-- [x] Verified over wss: concurrent rooms, forfeit on disconnect, hostile input
-- [ ] Client on Cloudflare Pages: needs a Cloudflare login
-- [ ] Set --origin on the server once the Pages domain exists
+- [x] Server: wss://indiscreet-chess-valaisu.fly.dev  (Fly, ~$4/month)
+- [x] Client: https://indiscreet-chess.indiscreet-chess-web.workers.dev  (free)
+- [x] Origin restricted via the ALLOWED_ORIGINS env var in fly.toml
+- [x] Verified over wss: concurrent rooms, forfeit, hostile input, origin refusal
+
+Cloudflare Pages project creation failed with an opaque API error on a fresh
+account, so the client is served as Workers static assets instead. Same free
+tier, same result: `cd web && npx wrangler deploy`.
 
 Deploy with `fly deploy --remote-only --ha=false`. Without `--ha=false` Fly
 adds a second machine, which would split rooms across two processes.

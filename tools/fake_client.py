@@ -19,6 +19,14 @@ from shared import protocol
 
 DEFAULT_URL = "ws://localhost:8765"
 
+# A deployed server restricts Origin, and non-browser clients send none, so
+# testing production means declaring which page we are standing in for.
+ORIGIN: str | None = None
+
+
+def _connect(url: str):
+    return websockets.connect(url, origin=ORIGIN) if ORIGIN else websockets.connect(url)
+
 
 def legal_destination(piece: dict) -> tuple[float, float] | None:
     """
@@ -84,7 +92,7 @@ class FakeClient:
             self.game_over.set()
 
     async def _run(self, action: str, code: str | None, duration: float) -> None:
-        async with websockets.connect(self.url) as ws:
+        async with _connect(self.url) as ws:
             self.ws = ws
             if action == "create":
                 await self.send({"type": protocol.CREATE_ROOM, "params": {}})
@@ -192,12 +200,12 @@ async def _await_msg(ws, kinds: set[str], timeout: float) -> dict | None:
 async def run_disconnect(url: str, grace: float) -> list[tuple[str, bool, str]]:
     """Drop one player mid-game; the other should be told, then win by forfeit."""
     results = []
-    async with websockets.connect(url) as host:
+    async with _connect(url) as host:
         await host.send(json.dumps({"type": protocol.CREATE_ROOM, "params": {}}))
         created = await _await_msg(host, {protocol.ROOM_CREATED}, 5)
         code = created["code"]
 
-        guest = await websockets.connect(url)
+        guest = await _connect(url)
         await guest.send(json.dumps({"type": protocol.JOIN_ROOM, "code": code}))
         joined = await _await_msg(guest, {protocol.ROOM_JOINED}, 5)
         results.append(("seats differ", created["color"] != joined["color"],
@@ -228,12 +236,12 @@ async def run_disconnect(url: str, grace: float) -> list[tuple[str, bool, str]]:
 async def run_rejoin(url: str, grace: float) -> list[tuple[str, bool, str]]:
     """Drop a player and reclaim the seat with the session token inside grace."""
     results = []
-    async with websockets.connect(url) as host:
+    async with _connect(url) as host:
         await host.send(json.dumps({"type": protocol.CREATE_ROOM, "params": {}}))
         created = await _await_msg(host, {protocol.ROOM_CREATED}, 5)
         code = created["code"]
 
-        guest = await websockets.connect(url)
+        guest = await _connect(url)
         await guest.send(json.dumps({"type": protocol.JOIN_ROOM, "code": code}))
         joined = await _await_msg(guest, {protocol.ROOM_JOINED}, 5)
         token = joined["token"]
@@ -243,7 +251,7 @@ async def run_rejoin(url: str, grace: float) -> list[tuple[str, bool, str]]:
         await _await_msg(host, {protocol.OPPONENT_LEFT}, 5)
 
         await asyncio.sleep(min(1.0, grace / 3))
-        guest2 = await websockets.connect(url)
+        guest2 = await _connect(url)
         await guest2.send(json.dumps({"type": protocol.REJOIN, "code": code,
                                       "token": token}))
         back = await _await_msg(guest2, {protocol.ROOM_JOINED, protocol.ERROR}, 5)
@@ -272,7 +280,7 @@ async def run_hostile(url: str) -> list[tuple[str, bool, str]]:
     results = []
 
     async def expect_error(label: str, msg: dict) -> None:
-        async with websockets.connect(url) as ws:
+        async with _connect(url) as ws:
             await ws.send(json.dumps(msg))
             try:
                 reply = json.loads(await asyncio.wait_for(ws.recv(), timeout=3))
@@ -304,7 +312,7 @@ async def run_hostile(url: str) -> list[tuple[str, bool, str]]:
     # the close instead of assuming one fixed delay, which a WAN round trip and
     # the server's own close handling can easily exceed.
     try:
-        async with websockets.connect(url) as ws:
+        async with _connect(url) as ws:
             for _ in range(200):
                 await ws.send(json.dumps({"type": protocol.PING, "t": 0}))
             deadline = asyncio.get_event_loop().time() + 8
@@ -321,6 +329,9 @@ async def run_hostile(url: str) -> list[tuple[str, bool, str]]:
 async def amain() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default=DEFAULT_URL)
+    ap.add_argument("--origin", default=None,
+                    help="Origin header to send; required against a server "
+                         "that restricts origins")
     ap.add_argument("--pair", action="store_true")
     ap.add_argument("--hostile", action="store_true")
     ap.add_argument("--disconnect", action="store_true")
@@ -330,6 +341,9 @@ async def amain() -> int:
     ap.add_argument("--rooms", type=int, default=1)
     ap.add_argument("--duration", type=float, default=8.0)
     args = ap.parse_args()
+
+    global ORIGIN
+    ORIGIN = args.origin
 
     failed = False
 
