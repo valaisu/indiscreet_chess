@@ -10,6 +10,9 @@ import * as P from "./protocol.ts";
 import { presetParams } from "./presets.ts";
 import { withCiv, piecePayload, describe, FLAVOUR, CIV_NAMES } from "./civs.ts";
 import { type GameState, forPiece } from "./protocol.ts";
+import { settings, save as saveSettings, PRECISE_MIN_DRAG, VIEW_DEFAULTS,
+         type View } from "./settings.ts";
+import { Recording, Player, SPEEDS } from "./replay.ts";
 
 const CLICK_R_SELECT = 0.5; // forgiving radius when nothing is selected
 const CLICK_R_SWITCH = 0.3; // strict radius once a piece is selected
@@ -29,6 +32,8 @@ const statusEl = $("status") as HTMLDivElement;
 const banner = $("banner") as HTMLDivElement;
 const modeSel = $("mode") as HTMLSelectElement;
 const pregame = $("pregame") as HTMLDivElement;
+const postgame = $("postgame") as HTMLDivElement;
+const replayBar = $("replay-bar") as HTMLDivElement;
 
 let net: Net;
 let renderer: Renderer;
@@ -42,6 +47,10 @@ let rejoining = false;
 let rejoinAttempts = 0;
 let retryTimer: number | null = null;
 let stale = false; // server speaks a protocol this bundle does not
+let precise = false; // any drag distance counts as a move while this is on
+let preciseLatched = false; // the on-screen button holds it; the key only taps
+const recording = new Recording();
+let player: Player | null = null; // non-null while watching the replay
 
 function setStatus(text: string, isError = false): void {
   if (stale) return; // a version warning outranks routine lobby chatter
@@ -67,7 +76,15 @@ async function ensureConnected(): Promise<boolean> {
       showBanner("Game ended \u2014 the server restarted");
       return;
     }
-    setStatus(m.reason ?? "server error", true);
+    // The lobby's status line is off-screen once the pre-game screen is up,
+    // and a civilization can push piece size past what the opening position
+    // allows — so a rejection at Ready has to be visible where it happens.
+    const reason = m.reason ?? "server error";
+    if (pregame.style.display === "block") {
+      $("pg-status").textContent = reason;
+      ($("btn-ready") as HTMLButtonElement).disabled = false;
+    }
+    setStatus(reason, true);
   });
   net.on(P.ROOM_CREATED, (m) => {
     ($("room-code") as HTMLInputElement).value = m.code;
@@ -107,7 +124,11 @@ async function ensureConnected(): Promise<boolean> {
     if (gameEl.style.display !== "block") enterGame();
     state = m;
     stateAt = performance.now();
-    if (m.game_over) showBanner(m.winner === "draw" ? "Draw" : `${m.winner} wins`);
+    recording.push(m, stateAt);
+    if (m.game_over) {
+      showBanner("");
+      showPostgame(m.winner === "draw" ? "Draw" : `${m.winner} wins`);
+    }
   });
   net.on(P.MOVE_REJECTED, (m) => setStatus(`rejected: ${m.reason}`, true));
   net.on(P.OPPONENT_LEFT, (m) => startLeftCountdown(m.grace_seconds ?? 30));
@@ -260,6 +281,15 @@ function applySettings(): void {
   }
 }
 
+/** The room's information rules, as set by whoever opens the room. */
+function readView(): View {
+  const view = { ...VIEW_DEFAULTS };
+  for (const input of document.querySelectorAll<HTMLInputElement>("[data-view]")) {
+    view[input.dataset.view as keyof View] = input.checked;
+  }
+  return view;
+}
+
 function readParams(): object {
   const params: Record<string, number> = {};
   for (const input of document.querySelectorAll<HTMLInputElement>("[data-param]")) {
@@ -274,13 +304,31 @@ function enterGame(): void {
   pregame.style.display = "none";
   gameEl.style.display = "block";
   renderer = new Renderer(canvas, net.color);
+  renderer.hints = hintMode();
   renderer.resize();
 }
 
 // --- input ------------------------------------------------------------------
 
 function playable(): boolean {
-  return !!state && !state.game_over && state.countdown === null;
+  return !player && !!state && !state.game_over && state.countdown === null;
+}
+
+/**
+ * Precise mode: a deliberate 0.2-square move is otherwise unreachable, because
+ * a drag that short reads as a click. While it is on, any drag counts and a
+ * click near a friendly piece is a move rather than a change of selection.
+ * Held on the keyboard, latched by the on-screen button for touch.
+ */
+function setPrecise(on: boolean): void {
+  precise = on;
+  $("btn-precise").classList.toggle("on", on);
+  if (renderer) renderer.hints = hintMode();
+}
+
+function hintMode(): "off" | "on" | "strong" {
+  if (!settings.showHints) return "off";
+  return precise ? "strong" : "on";
 }
 
 /** Try to move `sel` to the click; true if the move was sent. */
@@ -307,18 +355,25 @@ function onPointerDown(ev: PointerEvent): void {
   if (grabbed && grabbed.state === "idle" && mine(grabbed)) {
     if (selectedId !== null && selectedId !== grabbed.id) {
       const sel = pieces.find((p) => p.id === selectedId);
-      // A precise click on a friendly piece switches rather than moves.
-      const precise = findPieceAt(bx, by, pieces, CLICK_R_SWITCH);
-      if (sel && !precise && tryMove(sel, bx, by)) {
+      // A close click on a friendly piece switches rather than moves — unless
+      // precise mode is on, where landing next to a piece is the whole point.
+      const onPiece = !precise && findPieceAt(bx, by, pieces, CLICK_R_SWITCH);
+      if (sel && !onPiece && tryMove(sel, bx, by)) {
         selectedId = null;
         return;
       }
     }
     dragWasSelected = selectedId === grabbed.id;
-    dragId = grabbed.id;
-    dragPos = [ev.clientX, ev.clientY];
+    if (settings.moveMode !== "click") {
+      dragId = grabbed.id;
+      dragPos = [ev.clientX, ev.clientY];
+      canvas.setPointerCapture(ev.pointerId);
+    }
     selectedId = grabbed.id;
-    canvas.setPointerCapture(ev.pointerId);
+    return;
+  }
+  if (settings.moveMode === "drag") {
+    selectedId = null; // click-to-move is off: a click on empty board clears
     return;
   }
 
@@ -344,11 +399,14 @@ function onPointerUp(ev: PointerEvent): void {
     return;
   }
   const [bx, by] = renderer.pxToBoard(ev.clientX, ev.clientY);
-  const movedFar = Math.hypot(bx - sel.x, by - sel.y) > CLICK_R_SWITCH;
+  const threshold = precise ? PRECISE_MIN_DRAG : settings.dragThreshold;
+  const movedFar = Math.hypot(bx - sel.x, by - sel.y) > threshold;
 
   if (!movedFar) {
     // Released where it started: a plain click. Toggles the selection.
-    if (dragWasSelected) selectedId = null;
+    // With click-to-move off, the piece stays selected so the next drag is
+    // not swallowed by an accidental deselect.
+    if (dragWasSelected && settings.moveMode !== "drag") selectedId = null;
     return;
   }
   if (bx >= 0 && bx < 8 && by >= 0 && by < 8 && tryMove(sel, bx, by)) {
@@ -357,11 +415,72 @@ function onPointerUp(ev: PointerEvent): void {
   // Otherwise keep it selected so the click-click flow can still be used.
 }
 
+// --- post-game and replay ---------------------------------------------------
+
+function showPostgame(result: string): void {
+  $("pg-result").textContent = result;
+  if (player) return; // a late final frame must not cover the replay
+
+  postgame.style.display = "block";
+}
+
+function startReplay(): void {
+  if (!recording.frames.length) return;
+  postgame.style.display = "none";
+  replayBar.style.display = "flex";
+  selectedId = null;
+  dragId = null;
+  player = new Player(recording);
+  setSpeed(1);
+}
+
+function exitReplay(): void {
+  player = null;
+  replayBar.style.display = "none";
+  postgame.style.display = "block";
+}
+
+function setSpeed(speed: number): void {
+  if (player) player.speed = speed;
+  for (const el of $("rp-speeds").children) {
+    el.classList.toggle("on", parseFloat((el as HTMLElement).dataset.speed!) === speed);
+  }
+}
+
+const seek = $("rp-seek") as HTMLInputElement;
+let seeking = false;
+
+function updateReplayBar(): void {
+  if (!player) return;
+  const total = recording.duration;
+  if (!seeking) seek.value = String(total ? (player.t / total) * 1000 : 0);
+  // Plain shapes, not the media-control codepoints: those fall back to a
+  // tofu box in fonts that lack them.
+  $("rp-play").textContent = player.playing ? "\u275a\u275a" : "\u25b6";
+  $("rp-time").textContent = `${(player.t / 1000).toFixed(1)}s / ${(total / 1000).toFixed(0)}s`;
+}
+
+/**
+ * Back to the lobby. Rooms are in the server's memory and this one is over, so
+ * there is nothing to keep: dropping the seat and reloading is both the
+ * simplest and the most reliable way back to a clean slate.
+ */
+function newGame(): void {
+  sessionStorage.removeItem("seat");
+  history.replaceState(null, "", location.pathname + location.search);
+  location.reload();
+}
+
 // --- render loop ------------------------------------------------------------
 
 function frame(): void {
-  if (state && renderer) {
-    renderer.render(interpolate(state, performance.now() - stateAt), selectedId,
+  const now = performance.now();
+  if (player && renderer) {
+    const at = player.tick(now);
+    if (at) renderer.render(interpolate(at.state, at.age), null, 0);
+    updateReplayBar();
+  } else if (state && renderer) {
+    renderer.render(interpolate(state, now - stateAt), selectedId,
                     net.rtt, dragId, dragPos);
   }
   requestAnimationFrame(frame);
@@ -373,7 +492,7 @@ function frame(): void {
   localStorage.getItem("serverUrl") ?? DEFAULT_URL;
 
 $("btn-create").addEventListener("click", async () => {
-  if (await ensureConnected()) net.createRoom(readParams());
+  if (await ensureConnected()) net.createRoom(readParams(), false, readView());
 });
 $("btn-join").addEventListener("click", async () => {
   const code = ($("room-code") as HTMLInputElement).value.trim();
@@ -381,10 +500,10 @@ $("btn-join").addEventListener("click", async () => {
   if (await ensureConnected()) net.joinRoom(code);
 });
 $("btn-quick").addEventListener("click", async () => {
-  if (await ensureConnected()) net.quickMatch(readParams());
+  if (await ensureConnected()) net.quickMatch(readParams(), readView());
 });
 $("btn-solo").addEventListener("click", async () => {
-  if (await ensureConnected()) net.createRoom(readParams(), true);
+  if (await ensureConnected()) net.createRoom(readParams(), true, readView());
 });
 ($("server-url") as HTMLInputElement).addEventListener("change", (e) => {
   localStorage.setItem("serverUrl", (e.target as HTMLInputElement).value);
@@ -406,6 +525,53 @@ for (const input of document.querySelectorAll<HTMLInputElement>("[data-param]"))
 // The fields are marked up with the server defaults; start them on the
 // selected mode so what is shown is what will be sent.
 applySettings();
+
+$("btn-replay").addEventListener("click", startReplay);
+$("btn-newgame").addEventListener("click", newGame);
+$("rp-exit").addEventListener("click", exitReplay);
+$("rp-play").addEventListener("click", () => player?.toggle());
+for (const speed of SPEEDS) {
+  const b = document.createElement("button");
+  b.textContent = `${speed}\u00d7`;
+  b.dataset.speed = String(speed);
+  b.addEventListener("click", () => setSpeed(speed));
+  $("rp-speeds").append(b);
+}
+seek.addEventListener("pointerdown", () => { seeking = true; });
+seek.addEventListener("input", () => {
+  if (player) player.seek((parseFloat(seek.value) / 1000) * recording.duration);
+});
+seek.addEventListener("pointerup", () => { seeking = false; });
+
+// Precise mode: held on a keyboard, latched by the button for touch, where
+// there is no modifier to hold.
+$("btn-precise").addEventListener("click", () => {
+  preciseLatched = !precise;
+  setPrecise(preciseLatched);
+});
+
+// Personal settings. They apply immediately; nothing is sent anywhere.
+const moveModeSel = $("s-movemode") as HTMLSelectElement;
+const dragInput = $("s-drag") as HTMLInputElement;
+const hintsInput = $("s-hints") as HTMLInputElement;
+moveModeSel.value = settings.moveMode;
+dragInput.value = String(settings.dragThreshold);
+hintsInput.checked = settings.showHints;
+moveModeSel.addEventListener("change", () =>
+  saveSettings({ moveMode: moveModeSel.value as typeof settings.moveMode }));
+dragInput.addEventListener("change", () => {
+  const v = parseFloat(dragInput.value);
+  if (Number.isFinite(v) && v >= 0) saveSettings({ dragThreshold: v });
+  dragInput.value = String(settings.dragThreshold);
+});
+hintsInput.addEventListener("change", () => {
+  saveSettings({ showHints: hintsInput.checked });
+  if (renderer) renderer.hints = hintMode();
+});
+
+for (const input of document.querySelectorAll<HTMLInputElement>("[data-view]")) {
+  input.checked = VIEW_DEFAULTS[input.dataset.view as keyof View];
+}
 
 canvas.addEventListener("pointerdown", onPointerDown);
 canvas.addEventListener("pointermove", onPointerMove);
@@ -433,6 +599,15 @@ window.addEventListener("resize", () => renderer?.resize());
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") selectedId = null;
   if (e.key === "f" && renderer) renderer.flipped = !renderer.flipped;
+  if (e.key === settings.preciseKey && !precise) setPrecise(true);
+  if (e.key === " " && player) {
+    e.preventDefault();
+    player.toggle();
+  }
+});
+window.addEventListener("keyup", (e) => {
+  // The button latches precise mode; releasing the key must not cancel that.
+  if (e.key === settings.preciseKey && !preciseLatched) setPrecise(false);
 });
 
 // A room code in the fragment makes games shareable as a link.

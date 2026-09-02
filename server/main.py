@@ -20,6 +20,7 @@ import websockets
 from websockets.asyncio.server import serve
 
 from . import params, room as room_mod
+from .pieces import start_overlap_reason
 from .room import Connection, RoomManager, RUNNING
 from shared import protocol
 
@@ -115,7 +116,9 @@ class Hub:
         if room is None or room.state != room_mod.LOBBY or conn.color is None:
             return
         p = msg.get("params")
-        reason = params.validate_params(p)
+        # A civilization is applied client-side, so this is where a piece-size
+        # modifier lands: the opening position has to be checked here too.
+        reason = params.validate_params(p) or start_overlap_reason(p)
         if reason:
             log.warning("rejected ready params from %s: %s", conn.ip, reason)
             await conn.error(reason)
@@ -236,7 +239,7 @@ def client_ip(ws) -> str:
 
 async def main() -> None:
     global MAX_CONN_PER_IP
-    parser = argparse.ArgumentParser(description="Indiscreet Chess server")
+    parser = argparse.ArgumentParser(description="Continuous Chess server")
     parser.add_argument("--host", default=params.SERVER_HOST)
     parser.add_argument("--port", type=int, default=params.SERVER_PORT)
     parser.add_argument("--origin", action="append", default=None,

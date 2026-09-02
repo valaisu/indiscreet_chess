@@ -1,8 +1,10 @@
-# Indiscreet Chess
+# Continuous Chess
 
 ![Gameplay screenshot](images/snapshot_2.png)
 
 A real-time chess variant where both players move simultaneously on a continuous board. Instead of taking turns, you spend mana to queue moves and everything happens simultaneously.
+
+(The project was called Indiscreet Chess; the deployed hostnames still say so, since renaming them would change the link people have.)
 
 **[Play in your browser](https://indiscreet-chess.indiscreet-chess-web.workers.dev)** — nothing to install. Create a room and share the code, or take whoever is waiting.
 
@@ -40,8 +42,8 @@ A new move can only be queued when the piece is idle (not in any phase) and you 
 - A moving piece captures an enemy the instant their hitboxes touch.
 - If **both** pieces are moving when they touch, both are removed (mutual capture).
 - After capturing, a piece continues toward its original destination (stopping at the captured piece's perpendicular or the destination, whichever comes first).
-- Each piece can capture at most **one** enemy per move, except Knights and Pawns doing a diagonal capture.
-- A moving piece that would hit a friendly piece (or has already used its capture for this move) stops at the point of contact instead.
+- Each piece can capture at most **one** enemy per move. The Knight is the only exception.
+- A moving piece that would hit a friendly piece (or has already used its capture for this move) stops at the point of contact instead. This holds for every piece and every kind of move: nothing can capture its own side.
 - If a piece is captured during its preparation period, the queued move is cancelled, and mana is not refunded.
 
 ### Piece Movement
@@ -60,16 +62,57 @@ A new move can only be queued when the piece is idle (not in any phase) and you 
 If the pawn's center has never left its starting square, it may move forward up to two squares instead of one.
 
 **Pawn — Diagonal Capture**
-A pawn can be sent to one of two forward-diagonal landing zones (one square sideways, one square forward). This move is only legal if an enemy piece is already close enough to that landing point when the move is queued. While traveling diagonally, the pawn cannot be captured, cannot capture, and is never blocked — it passes through all pieces. On arrival, it captures every piece (friend or foe) whose hitbox overlaps the landing position. If any of those pieces were moving on arrival, the pawn is also removed. If all targets moved away before the pawn lands, it arrives safely and captures nothing.
+A pawn can be sent to one of two forward-diagonal landing zones (one square sideways, one square forward). This move is only legal if an enemy piece is already close enough to that landing point when the move is queued. While traveling diagonally the pawn cannot be captured and passes straight through enemy pieces — but **its own side still blocks it**: a friendly piece in the way stops it at the point of contact, and the move ends there having captured nothing. On arrival it captures **one** enemy: the nearest overlapping the landing position. It does not clear the square the way a Knight does, so landing between two enemies is a choice of one. If that enemy was moving on arrival, the pawn is removed as well. If everything moved away before the pawn lands, it arrives safely and captures nothing.
 
 **En Passant**
 When a pawn executes a double move, it leaves a ghost at the point where it crossed the 3rd rank (White) or 6th rank (Black). An enemy pawn can capture this ghost, which also removes the original pawn. The ghost disappears the next time the opponent queues any move other than capturing it.
 
 **Pawn Promotion**
-When a pawn's hitbox enters the last rank, it immediately promotes to a Queen. Any movement already in progress continues under Queen rules.
+When a pawn's **centerpoint** enters the last rank, it promotes to a Queen. Any movement already in progress continues to its destination, and a move that was queued as a diagonal capture still resolves as one — promotion changes what the piece is, never what its current move has already spent, so it cannot buy a second capture.
 
 **Castling**
 When neither the King nor a Rook has previously moved, the King can castle by moving 1–2 squares directly sideways toward that Rook. Both pieces begin moving simultaneously. The Rook is timed to arrive adjacent to the King's destination at the same moment the King arrives causing them to briefly overlap during transit. If either piece is blocked before the overlap begins, neither overlaps. If the Rook is blocked after that, the King continues until it contacts the stopped Rook. If the Rook is captured, the King continues unaffected.
+
+### Civilizations
+
+Both players secretly pick a civilization before the game. Each one is a set of
+percentage changes to the base settings — mana, tempo, aim, and **piece size** —
+priced on a shared points budget, so a pick is a style rather than an advantage.
+`node --experimental-strip-types tools/civ_table.mjs` prints the whole table,
+names any civilization that is off zero, and fails if one drifts more than a
+quarter point. The budget is not held to the last decimal on purpose: the
+per-piece rows are priced with estimates of how often each piece moves, and
+bending an exact number to cancel an estimated one is arithmetic, not balance.
+
+A larger piece blocks a file and reaches an enemy sooner, but is a bigger target
+and gets stopped by its own side more often. The budget assumes smaller is
+mildly better; that assumption is the one most worth testing.
+
+### Settings
+
+Set by whoever opens the room, and applied to both players:
+
+- **Tempo** — bullet, rapid or slow.
+- **What players can see** — the opponent's mana, their preparation, their
+  cooldowns, and where their moves are headed, each on or off. Hidden
+  information is filtered on the server and never sent, so it cannot be read
+  out of the connection. By default you see everything except their mana.
+
+Personal, stored in your browser and affecting nobody else:
+
+- **Moving a piece** — drag, click, or both.
+- **Shortest drag that counts as a move** — below it a drag only selects. Lower
+  it on a touchscreen, where a very short move is otherwise unreachable.
+- **Move hints** on or off.
+- Hold **Shift** — or press **Precise** on the board, for a touchscreen — to let
+  any drag distance count as a move and to brighten the hints.
+
+### After the game
+
+The result screen offers a replay of the game just played at 0.5×, 1×, 2× or 4×,
+with a scrubber, and a button back to a new game. The recording is the snapshots
+the server already sent, held in the tab: nothing is stored anywhere, and it
+shows the game as you saw it, hidden information included.
 
 ### Victory and Draw
 

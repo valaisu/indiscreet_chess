@@ -14,6 +14,7 @@ import time
 
 from . import params
 from .game import GameState
+from .pieces import start_overlap_reason
 from shared import protocol
 
 log = logging.getLogger("room")
@@ -63,10 +64,14 @@ class Connection:
 
 class Room:
     def __init__(self, code: str, params_white: dict, params_black: dict,
-                 public: bool = False, solo: bool = False) -> None:
+                 public: bool = False, solo: bool = False,
+                 view: dict | None = None) -> None:
         self.code = code
         self.public = public
         self.solo = solo
+        # Fixed by whoever opened the room, like the tempo: both sides play
+        # under the same information rules.
+        self.view: dict = params.build_view(view)
         # Built at start, not now: each player picks a civilization in the
         # pre-game screen, so their params are not known until both are ready.
         self.params: dict[str, dict] = {"white": params_white, "black": params_black}
@@ -114,6 +119,17 @@ class Room:
             except Exception:
                 pass
 
+    async def broadcast_game(self, game) -> None:
+        """Game snapshots, one per seat: each side may be entitled to see
+        different things. Solo holds both seats on one socket, so it gets the
+        unfiltered view once."""
+        seen: set[int] = set()
+        for color, conn in self.clients.items():
+            if conn is None or id(conn) in seen:
+                continue
+            seen.add(id(conn))
+            await conn.send(game.to_dict(None if self.solo else color))
+
     async def notify_state(self) -> None:
         # Deliberately no civ names: the pick stays hidden until the game runs.
         await self.broadcast({
@@ -123,6 +139,7 @@ class Room:
             "waiting": self.state == LOBBY,
             "seated":  {c: self.clients[c] is not None for c in ("white", "black")},
             "base_params": self.base_params,
+            "view": self.view,
             "ready":   dict(self.ready),
         })
 
@@ -147,14 +164,15 @@ class Room:
         self.game = GameState(solo=self.solo,
                               params_white=self.params["white"],
                               params_black=self.params["black"],
-                              civs=dict(self.civ))
+                              civs=dict(self.civ),
+                              view=self.view)
         self.state = RUNNING
         self.task = asyncio.create_task(self._run())
         log.info("room %s starting", self.code)
 
     async def _run(self) -> None:
         try:
-            await self.game.run(self.broadcast)
+            await self.game.run(self.broadcast_game)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -246,15 +264,21 @@ class RoomManager:
             pw = pb = msg.get("params")
 
         for label, p in (("params_white", pw), ("params_black", pb)):
-            reason = params.validate_params(p)
+            reason = params.validate_params(p) or start_overlap_reason(p)
             if reason:
                 log.warning("rejected %s from %s: %s", label, conn.ip, reason)
                 await conn.error(reason)
                 return None
 
+        reason = params.validate_view(msg.get("view"))
+        if reason:
+            log.warning("rejected view from %s: %s", conn.ip, reason)
+            await conn.error(reason)
+            return None
+
         solo = bool(msg.get("solo"))
         room = Room(self._new_code(), pw or {}, pb or {}, public=public and not solo,
-                    solo=solo)
+                    solo=solo, view=msg.get("view"))
         self.rooms[room.code] = room
         await room.seat(conn, "white")
         if solo:

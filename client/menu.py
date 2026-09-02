@@ -448,7 +448,7 @@ def _draw(screen, fonts, mode, vals, vals_w, vals_b, handicap, display_vals,
     s       = L['s']
 
     # Title
-    t = fonts['big'].render("Indiscreet Chess", True, (220, 220, 180))
+    t = fonts['big'].render("Continuous Chess", True, (220, 220, 180))
     screen.blit(t, (cx - t.get_width() // 2, L['title_y']))
 
     # Mode buttons

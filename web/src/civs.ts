@@ -21,7 +21,14 @@
  * the same discount on pawns. Buffing the king or pawns is defensive; buffing
  * anything else is offensive.
  *
- * diameter_piece is out for the same reason as in presets.ts.
+ * diameter_piece is the odd one out: it is not obviously good in one
+ * direction. A smaller piece is harder to hit and slips through gaps, a larger
+ * one blocks a file and reaches an enemy sooner — but it is also a bigger
+ * target and is stopped by friends more often. The rate below takes the second
+ * effect as dominant (smaller is better), which is the assumption most worth
+ * testing once games get played. It is probably too harsh on a short-range
+ * piece: a fatter pawn captures from further away, and reach is worth more to
+ * something that can only step one square. Suspect this rate before the rest.
  */
 
 import type { Modifiers, Params } from "./presets.ts";
@@ -37,6 +44,7 @@ export const PER_POINT: Record<string, number> = {
   movement_speed:        +10,
   cooldown:              -10,
   movement_freedom_deg:  +15,
+  diameter_piece:        -10,
 };
 
 /**
@@ -60,26 +68,29 @@ type Row = [number, number, number, number, number, number, number, number];
 const TABLE: Record<string, Row> = {
   //                       hun  roman  greek  persia  egypt  norse  swiss  byzant     per point
   mana_refill_rate:      [  -6,     0,     0,      0,     0,    -6,     6,      0 ], //   +3
-  maximum_mana:          [   0,     0,    -5,      0,    15,    -5,     5,      5 ], //   +5
+  maximum_mana:          [   0,     0,    -5,      0,    20,    -8,     5,      5 ], //   +5
   base_move_cost:        [   0,   -10,     0,     10,     0,     0,     0,     10 ], //   -5
-  distance_cost:         [   0,     0,    16,    -24,     8,     0,     0,      0 ], //   -8
-  preparation_period:    [   0,     0,   -10,      0,    24,   -20,    10,   12.4], //  -10
+  distance_cost:         [   0,     0,    10,    -24,     8,     0,     0,      0 ], //   -8
+  preparation_period:    [   0,     0,   -10,      0,    24,   -20,    10,   14.8], //  -10
   cooldown:              [  13,   -10,     0,   13.5,     0,     0,     0,    -20 ], //  -10
   movement_speed:        [  20,   -26,     0,      0,     0,    10, -20.5,      0 ], //  +10
   movement_freedom_deg:  [  15,   -15,  34.2,      0,     0,     0,     0,      0 ], //  +15
+  diameter_piece:        [   0,     0,     0,      0,    10,    -6,     0,      0 ], //  -10
 };
 
 /** [piece type, param, percent] per civ. Not every civ has one. */
 export const PIECE_TABLE: Record<string, [string, string, number][]> = {
   hun:       [["knight", "cooldown",           -15]],  // steppe cavalry
   roman:     [["pawn",   "base_move_cost",     -10]],  // the legion is the army
-  greek:     [["rook",   "movement_speed",     -20]],  // no tradition of siege
+  greek:     [["rook",   "movement_speed",     -20],   // no tradition of siege
+              ["pawn",   "diameter_piece",     +20]],  // the phalanx holds a line
   persian:   [["rook",   "distance_cost",      -20]],  // chariots on open roads
   egyptian:  [["king",   "base_move_cost",     -25]],  // the pharaoh is the state
   norse:     [],
   swiss:     [["pawn",   "cooldown",           -15],   // pikemen, endlessly
               ["knight", "preparation_period", +20]],  // and famously no horse
-  byzantine: [["king",   "preparation_period", -30]],  // the emperor behind walls
+  byzantine: [["king",   "preparation_period", -30],   // the emperor behind walls
+              ["king",   "diameter_piece",     -30]],  // and rarely seen at all
 };
 
 const round = (v: number) => Math.round(v * 1000) / 1000;
@@ -125,9 +136,24 @@ export function points(civ: string): number {
   return round(globalPoints(civ) + piecePoints(civ));
 }
 
-/** Civ names whose points do not balance — empty when the table is sound. */
+/**
+ * How far off budget a civilization may be before the table is called wrong.
+ *
+ * Exact zero was false precision. WEIGHT is a guess at how often each piece
+ * moves and the rate for piece size is openly a guess at whether size is even
+ * good, so every per-piece row costs an approximate number of points — and
+ * bending a real number to make an approximate one cancel is arithmetic, not
+ * balance. A quarter point is under 3% of a cooldown: smaller than the error
+ * in the numbers being checked, and far smaller than anything a player feels.
+ *
+ * Rows that apply to every piece are exact, so a civ built only from those
+ * should still land on zero. It is the piece-specific ones that drift.
+ */
+export const BUDGET_TOLERANCE = 0.25;
+
+/** Civ names whose points are outside the tolerance. Empty when sound. */
 export function unbalanced(): string[] {
-  return CIV_NAMES.filter((civ) => Math.abs(points(civ)) > 1e-9);
+  return CIV_NAMES.filter((civ) => Math.abs(points(civ)) > BUDGET_TOLERANCE);
 }
 
 export const CIVS: Record<string, Modifiers> = Object.fromEntries(
@@ -166,6 +192,7 @@ const LABEL: Record<string, string> = {
   movement_speed:       "Speed",
   cooldown:             "Cooldown",
   movement_freedom_deg: "Aim freedom",
+  diameter_piece:       "Piece size",
 };
 
 const PLURAL: Record<string, string> = {

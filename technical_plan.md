@@ -1,4 +1,4 @@
-# Technical Plan — Indiscreet Chess
+# Technical Plan — Continuous Chess
 
 ## 1. Architecture
 

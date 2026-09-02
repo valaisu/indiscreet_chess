@@ -29,6 +29,15 @@ step "typecheck"
 step "geometry parity"
 PYTHONPATH=. python3 tools/parity_test.py   # tools import `server`
 
+step "pawn rules"
+PYTHONPATH=. python3 tools/pawn_test.py
+
+step "hidden information"
+PYTHONPATH=. python3 tools/visibility_test.py
+
+step "civilization budget"
+node --experimental-strip-types tools/civ_table.mjs > /dev/null
+
 step "server"
 # --ha=false: a second machine would strand the two halves of a game.
 fly deploy --remote-only --ha=false

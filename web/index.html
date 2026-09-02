@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-    <title>Indiscreet Chess</title>
+    <title>Continuous Chess</title>
     <style>
       :root { color-scheme: dark; }
       * { box-sizing: border-box; }
@@ -12,9 +12,13 @@
         font-family: system-ui, -apple-system, sans-serif;
         height: 100dvh; overflow: hidden;
       }
+      /* The body cannot scroll — the board must never move under a drag — so
+         the lobby and the pre-game screen do their own scrolling. Without this
+         an opened settings panel simply runs off the bottom of the page. */
       #lobby {
         max-width: 30rem; margin: 0 auto; padding: 2rem 1.25rem;
         display: flex; flex-direction: column; gap: 1rem;
+        height: 100dvh; overflow-y: auto;
       }
       h1 { font-size: 1.5rem; margin: 0; }
       p.lede { margin: 0; color: #9a9a9a; font-size: 0.9rem; line-height: 1.5; }
@@ -37,7 +41,8 @@
       #status.error { color: #d98080; }
       #game { display: none; position: relative; height: 100dvh; }
       #board { width: 100%; height: 100%; display: block; touch-action: none; }
-      #pregame { display: none; max-width: 46rem; margin: 0 auto; padding: 2rem 1.25rem; }
+      #pregame { display: none; max-width: 46rem; margin: 0 auto;
+                 padding: 2rem 1.25rem; height: 100dvh; overflow-y: auto; }
       .cards { display: grid; gap: 0.6rem; margin: 0.75rem 0;
                grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); }
       .card { border: 1px solid #3a3a3a; border-radius: 8px; padding: 0.7rem 0.8rem;
@@ -60,11 +65,38 @@
         transform: translateX(-50%); background: rgba(0,0,0,0.75);
         padding: 0.5rem 1rem; border-radius: 6px; font-size: 0.9rem;
       }
+      #btn-precise {
+        position: absolute; top: 0.75rem; left: 0.75rem; padding: 0.4rem 0.7rem;
+        font-size: 0.8rem; opacity: 0.6;
+      }
+      #btn-precise.on { opacity: 1; background: #46648c; border-color: #7fa8d8; }
+      #postgame {
+        display: none; position: absolute; left: 50%; bottom: 12%;
+        transform: translateX(-50%); text-align: center;
+        background: rgba(0,0,0,0.8); padding: 0.9rem 1.1rem; border-radius: 8px;
+      }
+      #pg-result { font-size: 1.1rem; margin-bottom: 0.6rem; color: #ffdc64; }
+      #replay-bar {
+        display: none; position: absolute; left: 50%; bottom: 1rem;
+        transform: translateX(-50%); align-items: center; gap: 0.5rem;
+        background: rgba(0,0,0,0.8); padding: 0.5rem 0.7rem; border-radius: 8px;
+        max-width: 95vw;
+      }
+      #replay-bar button { padding: 0.35rem 0.55rem; font-size: 0.8rem; }
+      #replay-bar button.on { background: #46648c; border-color: #7fa8d8; }
+      #rp-seek { width: min(40vw, 16rem); }
+      #rp-time { font-size: 0.78rem; color: #9a9a9a;
+                 font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .opts { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.75rem; }
+      .opts .check { display: flex; align-items: center; gap: 0.5rem; }
+      .opts .check input { width: auto; }
+      .opts .check label { margin: 0; color: #dcdcdc; font-size: 0.85rem; }
+      .opts .note { margin: 0; font-size: 0.78rem; color: #8a8a8a; line-height: 1.4; }
     </style>
   </head>
   <body>
     <div id="lobby">
-      <h1>Indiscreet Chess</h1>
+      <h1>Continuous Chess</h1>
       <p class="lede">
         Real-time chess. Both players move at once, moves cost mana, and pieces
         capture by collision. Create a room and share the code, or take whoever
@@ -110,6 +142,61 @@
       </details>
 
       <details>
+        <summary>Controls</summary>
+        <div class="opts">
+          <div>
+            <label for="s-movemode">Moving a piece</label>
+            <select id="s-movemode">
+              <option value="both">Drag or click</option>
+              <option value="click">Click only</option>
+              <option value="drag">Drag only</option>
+            </select>
+          </div>
+          <div>
+            <label for="s-drag">Shortest drag that counts as a move (squares)</label>
+            <input id="s-drag" type="number" step="0.05" min="0" />
+          </div>
+          <div class="check">
+            <input id="s-hints" type="checkbox" />
+            <label for="s-hints">Show move hints</label>
+          </div>
+          <p class="note">
+            A drag shorter than the threshold selects the piece instead of
+            moving it, which is what makes a very short move hard to issue.
+            Hold Shift — or press Precise on the board, for a touchscreen — to
+            let any distance count and to brighten the hints.
+          </p>
+        </div>
+      </details>
+
+      <details>
+        <summary>What players can see</summary>
+        <div class="opts">
+          <div class="check">
+            <input id="v-mana" type="checkbox" data-view="enemy_mana" />
+            <label for="v-mana">Opponent's mana</label>
+          </div>
+          <div class="check">
+            <input id="v-prep" type="checkbox" data-view="enemy_prep" />
+            <label for="v-prep">Opponent's preparation (a move about to start)</label>
+          </div>
+          <div class="check">
+            <input id="v-cool" type="checkbox" data-view="enemy_cooldown" />
+            <label for="v-cool">Opponent's cooldowns</label>
+          </div>
+          <div class="check">
+            <input id="v-dest" type="checkbox" data-view="enemy_dest" />
+            <label for="v-dest">Where opponent's moves are headed</label>
+          </div>
+          <p class="note">
+            Set by whoever opens the room, and applied to both sides. Hidden
+            information is never sent to either client, so it cannot be read
+            out of the connection.
+          </p>
+        </div>
+      </details>
+
+      <details>
         <summary>Game settings</summary>
         <div class="params">
           <div>
@@ -152,6 +239,11 @@
             <input id="p-dist-cost" data-param="distance_cost" type="number"
                    step="0.05" value="0.2" />
           </div>
+          <div>
+            <label for="p-size">Piece size</label>
+            <input id="p-size" data-param="diameter_piece" type="number"
+                   step="0.05" value="0.6" />
+          </div>
         </div>
       </details>
     </div>
@@ -170,6 +262,21 @@
     <div id="game">
       <canvas id="board"></canvas>
       <div id="banner"></div>
+      <button id="btn-precise" title="Any drag distance counts as a move">Precise</button>
+      <div id="postgame">
+        <div id="pg-result"></div>
+        <div class="row">
+          <button id="btn-replay" class="primary">Watch replay</button>
+          <button id="btn-newgame">New game</button>
+        </div>
+      </div>
+      <div id="replay-bar">
+        <button id="rp-play">&#10106;&#10106;</button>
+        <span id="rp-speeds"></span>
+        <input id="rp-seek" type="range" min="0" max="1000" value="0" />
+        <span id="rp-time"></span>
+        <button id="rp-exit">Close</button>
+      </div>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

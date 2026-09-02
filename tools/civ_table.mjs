@@ -6,16 +6,18 @@
  * Cells are % against the base civilization, which is all zeros. Rows naming a
  * piece apply to that piece only. The "pt" column is the % that buys one point
  * of goodness, so its sign tells you which direction helps: cooldown is -10,
- * meaning a negative cell is a buff. The last row is what each civ spends, and
- * it must be zero. Exits non-zero if any civ is off budget.
+ * meaning a negative cell is a buff. The last row is what each civ spends. It
+ * should be near zero — piece-specific rows are estimates, so BUDGET_TOLERANCE
+ * of drift is allowed and printed rather than corrected. Exits non-zero only
+ * if a civ is outside it.
  */
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const src = join(dirname(fileURLToPath(import.meta.url)), "..", "web", "src");
 const { PRESETS } = await import(join(src, "presets.ts"));
-const { CIV_NAMES, PERCENTS, PIECE_TABLE, PER_POINT, points, unbalanced } =
-  await import(join(src, "civs.ts"));
+const { CIV_NAMES, PERCENTS, PIECE_TABLE, PER_POINT, points, unbalanced,
+        BUDGET_TOLERANCE } = await import(join(src, "civs.ts"));
 
 const civs = [...CIV_NAMES];
 const LABEL = 26;
@@ -61,7 +63,18 @@ console.log(
 const bad = unbalanced();
 console.log("");
 if (bad.length) {
-  console.error(`OFF BUDGET: ${bad.map((c) => `${c} = ${points(c)}`).join(", ")}`);
+  console.error(
+    `OFF BUDGET (over ${BUDGET_TOLERANCE}): ` +
+    bad.map((c) => `${c} = ${points(c)}`).join(", "),
+  );
   process.exit(1);
 }
-console.log(`On budget: all ${civs.length} civilizations spend 0 points.\n`);
+// Name the ones that are merely near zero: drift is acceptable, but it should
+// never be invisible.
+const drifting = civs.filter((c) => points(c) !== 0);
+console.log(
+  `On budget: all ${civs.length} civilizations within \u00b1${BUDGET_TOLERANCE} points` +
+  (drifting.length
+    ? `, ${drifting.map((c) => `${c} ${points(c) > 0 ? "+" : ""}${points(c)}`).join(", ")}`
+    : ", all exactly 0") + ".\n",
+);

@@ -108,3 +108,36 @@ def validate_params(d: object) -> str | None:
         if not (lo <= value <= hi):
             return f"{key} must be between {lo} and {hi}"
     return None
+
+
+# --- Information visibility ---------------------------------------------
+# What each player is allowed to see of the opponent. The defaults reproduce
+# the game as it was before these were settable: you never saw the enemy's
+# mana, but you saw every timer and every destination marker. Hiding is done
+# on the server, not in the renderer — anything sent to a client is knowable
+# by that client, whatever it chooses to draw.
+VIEW_DEFAULTS: dict[str, bool] = {
+    "enemy_mana":     False,   # opponent's mana bar
+    "enemy_prep":     True,    # opponent's pieces show they are preparing a move
+    "enemy_cooldown": True,    # opponent's pieces show they are on cooldown
+    "enemy_dest":     True,    # markers for where opponent's moves are headed
+}
+
+
+def validate_view(d: object) -> str | None:
+    """Return a rejection reason, or None if the visibility dict is acceptable."""
+    if d is None:
+        return None
+    if not isinstance(d, dict):
+        return "view must be an object"
+    for key, value in d.items():
+        if key not in VIEW_DEFAULTS:
+            return f"unknown view option: {key}"
+        if not isinstance(value, bool):
+            return f"view.{key} must be a boolean"
+    return None
+
+
+def build_view(d: object) -> dict[str, bool]:
+    """Merge a validated view dict over the defaults."""
+    return {**VIEW_DEFAULTS, **(d if isinstance(d, dict) else {})}

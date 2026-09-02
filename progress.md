@@ -129,3 +129,67 @@ python -m tools.fake_client --pair --rooms 3 --hostile
 # Load tests share one address, so raise the per-IP cap on the server:
 #   python -m server.main --max-conn-per-ip 40
 ```
+
+---
+
+## Part 10 — Naming, information, replay, input [done]
+
+- [x] Renamed to **Continuous Chess** in every user-facing string and doc.
+      Deployed hostnames, the Fly app and the npm package keep the old name:
+      changing those changes the URL people have and re-provisions the app.
+- [x] `diameter_piece` travels in `GAME_STATE` (`"d"` per piece), so the client
+      draws and snaps with the real hitbox. It is now a tempo-preset row and a
+      civilization dimension; a promoted pawn takes the queen's size.
+- [x] Room-level visibility options (`view` in CREATE_ROOM / QUICK_MATCH):
+      enemy mana, preparation, cooldown, destination. Filtered in
+      `GameState.to_dict(viewer)` — the server sends each seat only what it may
+      see, so `Room.broadcast_game` serialises once per player.
+- [x] Post-game screen: replay at 0.5/1/2/4x with a scrubber, or a new game.
+      The recording is the received snapshots, client-side only.
+- [x] Personal settings in localStorage: move mode, drag threshold, hints, and
+      a precise mode (Shift, or an on-screen button for touch) that lets any
+      drag distance count.
+- [x] `tools/visibility_test.py` — asserts hidden information is absent from
+      the snapshot, not merely undrawn. Wired into `deploy.sh` alongside the
+      civilization budget check.
+- Protocol VERSION 3 → 4.
+
+### Not built: accounts and rating
+
+`docs/accounts.md` is a design with a recommendation (OAuth, no stored
+passwords, Supabase free tier, Elo per tempo mode, anonymous play unchanged).
+It needs four answers before any of it is written, one of which involves
+spending.
+
+## Part 11 — Pawn rework and opening geometry [done]
+
+- [x] A diagonal capture takes **one** enemy — the nearest overlapping the
+      landing point — instead of clearing the square. It spends
+      `capture_remaining` like every other capture; only the Knight still
+      bursts.
+- [x] It can no longer take friendly pieces at all. `physics._friendly_block`
+      sweeps the flight against the pawn's own side and stops it at the contact
+      surface, capturing nothing — the same ending every other blocked move
+      has, and it avoids a pawn coming to rest overlapping its own piece.
+      Enemies still cannot touch it, and ghosts never block.
+- [x] Promotion fires on the **centerpoint** reaching the last rank, not the
+      hitbox edge. The old rule promoted a large pawn most of a square early,
+      so promotion depended on piece size.
+- [x] `Piece.diagonal_capture` is stamped when the move is queued
+      (`rules.is_forward_pawn_move`) and read by the physics, replacing a test
+      derived from `type == PAWN`. A pawn that promotes in mid-flight kept its
+      immunity and its arrival burst only because of this; before it, the queen
+      dropped out of the immune set halfway across and never fired.
+- [x] `pieces.start_overlap_reason` refuses any settings whose opening position
+      has two pieces touching, checked on the real layout because sizes are per
+      piece type. Enforced at CREATE_ROOM/QUICK_MATCH and at SET_READY — a base
+      size can be legal while a civilization's pawn modifier pushes it over.
+- [x] Errors are now shown on the pre-game screen, which is where that second
+      rejection lands; the lobby's status line is off-screen by then.
+- [x] Greek pawns +25% -> +20%, distance cost left at 10%. Greek therefore sits
+      at +0.15 points and the budget check gained a tolerance
+      (`BUDGET_TOLERANCE = 0.25`) rather than a corrected decimal: per-piece
+      rows are priced with estimates, so exact zero was false precision.
+      `civ_table.mjs` prints the drift instead of hiding it.
+- [x] `tools/pawn_test.py` — 18 checks over capture count, promotion timing,
+      mid-flight promotion and opening geometry. In `deploy.sh`.

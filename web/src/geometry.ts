@@ -18,6 +18,8 @@ export interface Piece {
   vel_x?: number;
   vel_y?: number;
   has_moved?: boolean;
+  /** Hitbox diameter, sent per piece: a civilization may size types apart. */
+  d?: number;
 }
 
 export const SQRT2 = Math.sqrt(2.0);
@@ -140,7 +142,9 @@ export function snapDestination(
     trySector(0.0, fwd, Math.min(maxFwd, boardMax(0.0, fwd)));
 
     // Diagonal capture circles: only an enemy in range opens a valid arc.
+    // The pawn's own hitbox decides the overlap, exactly as _piece_at_dest does.
     const diagR = SQRT2 * Math.tan(freedomRad);
+    const pawnD = piece.d ?? DIAMETER_PIECE;
     if (pieces !== null) {
       for (const xdir of [-1.0, 1.0]) {
         const ccx = px + xdir;
@@ -151,10 +155,10 @@ export function snapDestination(
           if (other.id === piece.id) continue;
           if (other.owner === owner) continue;
           const otherD = Math.hypot(other.x - ccx, other.y - ccy);
-          if (otherD > diagR + DIAMETER_PIECE + 1e-6) continue;
+          if (otherD > diagR + pawnD + 1e-6) continue;
           if (
             dToCenter <= diagR &&
-            Math.hypot(bx - other.x, by - other.y) <= DIAMETER_PIECE
+            Math.hypot(bx - other.x, by - other.y) <= pawnD
           ) {
             return { x: bx, y: by, d: 0.0 };
           }
@@ -163,7 +167,7 @@ export function snapDestination(
             alpha = Math.PI;
           } else {
             const cosA =
-              (diagR * diagR + otherD * otherD - DIAMETER_PIECE * DIAMETER_PIECE) /
+              (diagR * diagR + otherD * otherD - pawnD * pawnD) /
               (2 * diagR * otherD);
             if (cosA >= 1.0) continue; // too far; no valid arc
             alpha = Math.acos(Math.max(-1.0, cosA));

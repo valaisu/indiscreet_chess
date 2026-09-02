@@ -85,16 +85,16 @@ export class Net {
     this.pingTimer = null;
   }
 
-  createRoom(params: object, solo = false): void {
-    this.send({ type: P.CREATE_ROOM, params, solo });
+  createRoom(params: object, solo = false, view?: object): void {
+    this.send({ type: P.CREATE_ROOM, params, solo, view });
   }
 
   joinRoom(code: string): void {
     this.send({ type: P.JOIN_ROOM, code: code.trim().toUpperCase() });
   }
 
-  quickMatch(params: object): void {
-    this.send({ type: P.QUICK_MATCH, params });
+  quickMatch(params: object, view?: object): void {
+    this.send({ type: P.QUICK_MATCH, params, view });
   }
 
   rejoin(code: string, token: string): void {
