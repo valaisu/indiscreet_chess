@@ -8,6 +8,7 @@ import { interpolate } from "./interp.ts";
 import { snapDestination, findPieceAt, type Piece } from "./geometry.ts";
 import * as P from "./protocol.ts";
 import { presetParams } from "./presets.ts";
+import { withCiv } from "./civs.ts";
 import { type GameState, perOwner } from "./protocol.ts";
 
 const CLICK_R_SELECT = 0.5; // forgiving radius when nothing is selected
@@ -26,6 +27,8 @@ const gameEl = $("game") as HTMLDivElement;
 const canvas = $("board") as HTMLCanvasElement;
 const statusEl = $("status") as HTMLDivElement;
 const banner = $("banner") as HTMLDivElement;
+const modeSel = $("mode") as HTMLSelectElement;
+const civSel = $("civ") as HTMLSelectElement;
 
 let net: Net;
 let renderer: Renderer;
@@ -178,10 +181,15 @@ function retry(): void {
     .catch(scheduleRetry);
 }
 
-/** Write a mode's params into the settings fields; "custom" leaves them be. */
-function applyMode(mode: string): void {
-  const params = presetParams(mode);
-  if (!params) return;
+/**
+ * Write the current mode+civ into the settings fields. "Custom" means the
+ * fields were hand-set, so neither is reapplied — a civ multiplier compounds
+ * if it lands on values it has already modified.
+ */
+function applySettings(): void {
+  const base = presetParams(modeSel.value);
+  if (!base) return;
+  const params = withCiv(base, civSel.value);
   for (const input of document.querySelectorAll<HTMLInputElement>("[data-param]")) {
     const value = params[input.dataset.param!];
     if (value !== undefined) input.value = String(value);
@@ -317,8 +325,8 @@ $("btn-solo").addEventListener("click", async () => {
   localStorage.setItem("serverUrl", (e.target as HTMLInputElement).value);
 });
 
-const modeSel = $("mode") as HTMLSelectElement;
-modeSel.addEventListener("change", () => applyMode(modeSel.value));
+modeSel.addEventListener("change", applySettings);
+civSel.addEventListener("change", applySettings);
 // Editing any field by hand means the settings are no longer a named mode.
 for (const input of document.querySelectorAll<HTMLInputElement>("[data-param]")) {
   input.addEventListener("input", () => {
@@ -327,7 +335,7 @@ for (const input of document.querySelectorAll<HTMLInputElement>("[data-param]"))
 }
 // The fields are marked up with the server defaults; start them on the
 // selected mode so what is shown is what will be sent.
-applyMode(modeSel.value);
+applySettings();
 
 canvas.addEventListener("pointerdown", onPointerDown);
 canvas.addEventListener("pointermove", onPointerMove);
