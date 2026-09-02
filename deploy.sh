@@ -34,6 +34,8 @@ step "server"
 fly deploy --remote-only --ha=false
 
 step "client"
-(cd web && npx wrangler deploy)
+# npm run deploy, not wrangler deploy: wrangler only uploads ./dist, so
+# calling it alone ships whatever happened to be built last.
+(cd web && npm run deploy)
 
 printf '\nDeployed. Open tabs still hold the old bundle until reloaded.\n'
