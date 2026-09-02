@@ -1,0 +1,43 @@
+# Rooms live in memory, so this app must never run more than one machine:
+# a second instance would strand the two halves of a game in separate worlds.
+# min_machines_running does not prevent that — Fly adds a second machine for
+# high availability unless you deploy with --ha=false:
+#   fly deploy --remote-only --ha=false
+app = "indiscreet-chess-valaisu"
+primary_region = "arn"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8765"
+  # Only these pages may open sockets. Without it any site could drive this
+  # server and spend its egress. localhost is kept so `npm run dev` can be
+  # pointed at production while working on the client.
+  ALLOWED_ORIGINS = "https://indiscreet-chess.indiscreet-chess-web.workers.dev,http://localhost:5173"
+
+[http_service]
+  internal_port = 8765
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
+
+  # Two connections per room, on a 512 MB machine. These caps bound how much
+  # traffic an abusive client can pull before Fly's proxy starts refusing —
+  # the account spend limit is the real backstop, this shrinks the target.
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 20
+    hard_limit = 40
+
+[[http_service.checks]]
+  grace_period = "10s"
+  interval = "30s"
+  method = "GET"
+  path = "/health"
+  timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

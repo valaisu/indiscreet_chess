@@ -48,6 +48,59 @@
 
 ---
 
+## Online Multiplayer (branch: web-client)
+
+See `online_plan.md` for the full plan and the rationale behind each choice.
+
+### Part 6 — Room layer [done]
+- [x] server/room.py — Room, RoomManager, room codes, quick match, GC sweep
+- [x] server/main.py — rewritten as a message dispatch hub
+- [x] Server-assigned colours (clients no longer claim a seat)
+- [x] Disconnect grace window, forfeit on timeout, REJOIN by session token
+- [x] GameState.forfeit() — the only change to game.py
+
+### Part 7 — Hardening [done]
+- [x] params.LIMITS + validate_params — params are untrusted input now
+- [x] Origin restriction, per-IP room and connection caps
+- [x] QUEUE_MOVE token bucket, message rate cap, 4 KB frame limit
+- [x] logging instead of print; /health reports room and connection counts
+
+### Part 8 — Browser client [done]
+- [x] web/ — TypeScript + canvas, Vite, no framework (~17 KB bundle)
+- [x] geometry.ts — port of _snap_destination
+- [x] Move-legality hints, drag-to-move, click-to-move, board flip
+- [x] Jitter buffer (100 ms render delay), RTT display
+- [x] Auto-rejoin when a backgrounded tab wakes
+- [x] Room codes in the URL fragment for shareable links
+
+### Part 9 — Deployment [live]
+- [x] Dockerfile (python:3.12-slim, websockets only — no pygame). 43 MB image.
+- [x] Server: wss://indiscreet-chess-valaisu.fly.dev  (Fly, ~$4/month)
+- [x] Client: https://indiscreet-chess.indiscreet-chess-web.workers.dev  (free)
+- [x] Origin restricted via the ALLOWED_ORIGINS env var in fly.toml
+- [x] Verified over wss: concurrent rooms, forfeit, hostile input, origin refusal
+
+Cloudflare Pages project creation failed with an opaque API error on a fresh
+account, so the client is served as Workers static assets instead. Same free
+tier, same result: `cd web && npx wrangler deploy`.
+
+Deploy with `fly deploy --remote-only --ha=false`. Without `--ha=false` Fly
+adds a second machine, which would split rooms across two processes.
+
+### Testing
+- `tools/fake_client.py` — headless client: concurrent rooms, forfeit on
+  disconnect, seat reclaim, hostile input. No test suite existed before this.
+- `tools/parity_test.py` — asserts every destination geometry.ts produces is
+  accepted by server/rules.py. Found two real bugs the pygame client shares:
+  castling offered with no rook, and a pawn snapping onto its own square.
+
+### Known gaps
+- The pygame client in `client/` does not work against the new server; the
+  handshake changed. It still works on `main`.
+- Its two geometry bugs above are unfixed there (it is being retired).
+
+---
+
 ## How to Run
 
 ```bash
@@ -59,4 +112,20 @@ python host.py
 
 # Multiplayer — guest:
 python host.py   # pick Join, enter host's IP
+```
+
+### Online (branch: web-client)
+
+```bash
+# Server (only needs: pip install -r requirements-server.txt)
+python -m server.main --port 8765 --verbose
+
+# Client
+cd web && npm install && npm run dev
+
+# Tests
+python -m tools.parity_test --samples 20000
+python -m tools.fake_client --pair --rooms 3 --hostile
+# Load tests share one address, so raise the per-IP cap on the server:
+#   python -m server.main --max-conn-per-ip 40
 ```

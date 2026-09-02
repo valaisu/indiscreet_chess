@@ -1,0 +1,11 @@
+.venv/
+.git/
+__pycache__/
+**/__pycache__/
+client/
+web/
+images/
+tools/
+*.md
+*.txt
+!requirements-server.txt

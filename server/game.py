@@ -387,6 +387,13 @@ class GameState:
             self.game_over = True
             self.winner = "white"
 
+    def forfeit(self, color: str) -> None:
+        """End the game against `color` (disconnect timeout or resignation)."""
+        if self.game_over:
+            return
+        self.game_over = True
+        self.winner = "black" if color == "white" else "white"
+
     # ------------------------------------------------------------------
     # Serialisation
     # ------------------------------------------------------------------
