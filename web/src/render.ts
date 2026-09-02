@@ -6,7 +6,7 @@
  */
 
 import { canCastle, type Piece } from "./geometry.ts";
-import { type GameState, perOwner } from "./protocol.ts";
+import { type GameState, forPiece } from "./protocol.ts";
 
 const C_BG = "#1e1e1e";
 const C_LIGHT = "#f0d9b5";
@@ -206,12 +206,15 @@ export class Renderer {
     const ctx = this.ctx;
     const { x: bx, y: by, type: ptype, owner } = piece;
     const [cx, cy] = this.boardToPx(bx, by);
-    const fr = (perOwner(state.freedom_deg, owner, 5.0) * Math.PI) / 180;
+    const fr =
+      (forPiece(state, piece, "movement_freedom_deg", state.freedom_deg, 5.0) * Math.PI) / 180;
 
     const mana = state.mana?.[owner] ?? 0;
     const pp = state.player_params?.[owner];
-    const baseCost = pp?.base_move_cost ?? 1.0;
-    const distCost = pp?.distance_cost ?? 0.2;
+    const baseCost = forPiece(state, piece, "base_move_cost", undefined,
+                              pp?.base_move_cost ?? 1.0);
+    const distCost = forPiece(state, piece, "distance_cost", undefined,
+                              pp?.distance_cost ?? 0.2);
     const maxDist = distCost > 1e-9 ? Math.max(0, (mana - baseCost) / distCost) : 8.0;
     const manaR = maxDist * this.sq;
 
@@ -361,10 +364,10 @@ export class Renderer {
 
     const timer = p.state_timer ?? 0;
     if (p.state === "preparation") {
-      const total = perOwner(state.prep_period, p.owner, 0.5);
+      const total = forPiece(state, p, "preparation_period", state.prep_period, 0.5);
       if (total > 0) this.drawTimerArc(cx, cy, 1 - timer / total, C_TIMER_PREP);
     } else if (p.state === "cooldown") {
-      const total = perOwner(state.cooldown, p.owner, 0.8);
+      const total = forPiece(state, p, "cooldown", state.cooldown, 0.8);
       if (total > 0) this.drawTimerArc(cx, cy, 1 - timer / total, C_TIMER_COOL);
     }
   }

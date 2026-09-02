@@ -1,6 +1,6 @@
 // Mirrors shared/protocol.py. Keep in sync.
 // Must equal VERSION in shared/protocol.py; deploy.sh refuses to ship a mismatch.
-export const VERSION = 1;
+export const VERSION = 2;
 
 export const QUEUE_MOVE = "QUEUE_MOVE";
 export const GAME_STATE = "GAME_STATE";
@@ -34,9 +34,26 @@ export interface GameState {
   prep_period: Record<string, number> | number;
   cooldown: Record<string, number> | number;
   player_params?: Record<string, { base_move_cost: number; distance_cost: number }>;
+  /** owner -> piece type -> param overrides. Only what a civ actually changes. */
+  piece_params?: Record<string, Record<string, Record<string, number>>>;
   countdown: number | null;
   game_over: boolean;
   winner: string | null;
+}
+
+/**
+ * A piece's effective value for `param`. A civilization may single out one
+ * piece type, so its override wins over the owner-wide value in `ownerValue`.
+ */
+export function forPiece(
+  state: GameState,
+  piece: { owner: string; type: string },
+  param: string,
+  ownerValue: Record<string, number> | number | undefined,
+  fallback: number,
+): number {
+  const override = state.piece_params?.[piece.owner]?.[piece.type]?.[param];
+  return override ?? perOwner(ownerValue, piece.owner, fallback);
 }
 
 /** Read a field that the server sends either per-owner or as a bare number. */

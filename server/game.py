@@ -23,6 +23,12 @@ def _build_pp(overrides: dict | None) -> dict:
     }
 
 
+def _build_piece_pp(overrides: dict | None) -> dict[str, dict]:
+    """Per-piece-type overrides, keyed by piece type. Validated upstream; any
+    param not named here falls through to the player's own value."""
+    return dict((overrides or {}).get("pieces", {}))
+
+
 class GameState:
     def __init__(self, solo: bool = False,
                  params_white: dict | None = None,
@@ -33,8 +39,12 @@ class GameState:
             "white": _build_pp(params_white),
             "black": _build_pp(params_black),
         }
+        self._piece_pp: dict[str, dict] = {
+            "white": _build_piece_pp(params_white),
+            "black": _build_piece_pp(params_black),
+        }
         for piece in self.pieces:
-            piece.diameter = self._pp[piece.owner]["diameter_piece"]
+            piece.diameter = self._pf(piece)["diameter_piece"]
         self.mana: dict[str, float] = {
             "white": self._pp["white"]["maximum_mana"] * 0.8,
             "black": self._pp["black"]["maximum_mana"] * 0.8,
@@ -74,7 +84,7 @@ class GameState:
             return _reject(piece_id, "piece not idle")
 
         dest_x, dest_y = dest
-        pp = self._pp[piece.owner]
+        pp = self._pf(piece)
 
         reason = validate_move(piece, dest_x, dest_y, self.pieces, pp["movement_freedom_deg"])
         if reason:
@@ -186,7 +196,7 @@ class GameState:
         piece.dest_x = move["dest_x"]
         piece.dest_y = move["dest_y"]
         piece.state = PieceState.PREPARATION
-        pp = self._pp[piece.owner]
+        pp = self._pf(piece)
         piece.state_timer = pp["preparation_period"]
         piece.movement_speed = pp["movement_speed"]
         piece.cooldown_duration = pp["cooldown"]
@@ -237,7 +247,7 @@ class GameState:
         if king_travel_time < 1e-9:
             return
 
-        rook_pp = self._pp[rook.owner]
+        rook_pp = self._pf(rook)
         rook.dest_x = rook_dest_x
         rook.dest_y = rook.y
         rook.state = PieceState.MOVING
@@ -297,7 +307,7 @@ class GameState:
                 x=piece.x,
                 y=ghost_y,
             )
-            ghost.diameter = self._pp[ghost.owner]["diameter_piece"]
+            ghost.diameter = self._pf(ghost)["diameter_piece"]
             self.pieces.append(ghost)
             self._ghost_map[ghost_id] = {"pawn_id": piece.id, "window_closed": False}
             piece.ghost_created = True
@@ -415,6 +425,7 @@ class GameState:
                 }
                 for c in ("white", "black")
             },
+            "piece_params": {c: self._piece_pp[c] for c in ("white", "black")},
             "countdown": self.countdown,
             "game_over": self.game_over,
             "winner": self.winner,
@@ -423,6 +434,14 @@ class GameState:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _pf(self, piece: Piece) -> dict:
+        """Params as they apply to one piece: its owner's, with any override
+        for its type laid on top. Ghosts have no type of their own here, so
+        they simply take the owner's."""
+        pp = self._pp[piece.owner]
+        override = self._piece_pp[piece.owner].get(piece.type.value)
+        return {**pp, **override} if override else pp
 
     def _find(self, piece_id: str) -> Piece | None:
         for p in self.pieces:

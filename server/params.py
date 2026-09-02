@@ -30,6 +30,18 @@ LIMITS: dict[str, tuple[float, float]] = {
     "diameter_piece":       (0.05, 1.5),
 }
 
+# Params a civilization may vary for one piece type. Mana is a player-wide
+# resource, so refill rate and pool size are not in here.
+PER_PIECE_PARAMS: frozenset[str] = frozenset({
+    "base_move_cost", "distance_cost", "preparation_period",
+    "movement_speed", "cooldown", "movement_freedom_deg", "diameter_piece",
+})
+
+# Ghosts are en passant markers, not something a player can order about.
+PIECE_TYPES: frozenset[str] = frozenset({
+    "pawn", "rook", "knight", "bishop", "queen", "king",
+})
+
 DEFAULT_PARAMS: dict[str, float] = {
     "mana_refill_rate":     MANA_REFILL_RATE,
     "maximum_mana":         MAXIMUM_MANA,
@@ -43,6 +55,37 @@ DEFAULT_PARAMS: dict[str, float] = {
 }
 
 
+def _validate_value(key: str, value: object) -> str | None:
+    if key not in LIMITS:
+        return f"unknown param: {key}"
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return f"{key} must be a number"
+    if value != value or value in (float("inf"), float("-inf")):
+        return f"{key} must be finite"
+    lo, hi = LIMITS[key]
+    if not (lo <= value <= hi):
+        return f"{key} must be between {lo} and {hi}"
+    return None
+
+
+def _validate_pieces(d: object) -> str | None:
+    """Per-piece-type overrides: {"knight": {"cooldown": 0.5}, ...}."""
+    if not isinstance(d, dict):
+        return "pieces must be an object"
+    for piece_type, overrides in d.items():
+        if piece_type not in PIECE_TYPES:
+            return f"unknown piece type: {piece_type}"
+        if not isinstance(overrides, dict):
+            return f"pieces.{piece_type} must be an object"
+        for key, value in overrides.items():
+            if key not in PER_PIECE_PARAMS:
+                return f"{key} cannot vary per piece"
+            reason = _validate_value(key, value)
+            if reason:
+                return f"pieces.{piece_type}: {reason}"
+    return None
+
+
 def validate_params(d: object) -> str | None:
     """Return a rejection reason, or None if the param dict is acceptable."""
     if d is None:
@@ -50,6 +93,11 @@ def validate_params(d: object) -> str | None:
     if not isinstance(d, dict):
         return "params must be an object"
     for key, value in d.items():
+        if key == "pieces":
+            reason = _validate_pieces(value)
+            if reason:
+                return reason
+            continue
         if key not in LIMITS:
             return f"unknown param: {key}"
         if isinstance(value, bool) or not isinstance(value, (int, float)):

@@ -15,10 +15,13 @@
  *
  * These stack on a tempo preset: withCiv(PRESETS[mode], civ).
  *
- * Per-piece favourites are not here yet. Params are per player on the server
- * (game.py builds _pp[colour]) and freedom/prep/cooldown reach the client as
- * one value per owner, so a knight cannot yet differ from a rook without
- * changing both. diameter_piece is out for the same reason as in presets.ts.
+ * PIECE_TABLE singles out one piece type. Such an effect is worth only the
+ * share of moves that piece accounts for, so its point cost is scaled by
+ * WEIGHT — a 20% discount on the king, which rarely moves, costs a fraction of
+ * the same discount on pawns. Buffing the king or pawns is defensive; buffing
+ * anything else is offensive.
+ *
+ * diameter_piece is out for the same reason as in presets.ts.
  */
 
 import type { Modifiers, Params } from "./presets.ts";
@@ -36,6 +39,16 @@ const PER_POINT: Record<string, number> = {
   movement_freedom_deg:  +15,
 };
 
+/**
+ * Share of the moves each piece type accounts for while the game is still
+ * undecided — not its chess value. Eight pawns move constantly; the queen is
+ * powerful but held back; the king barely moves at all. These are estimates
+ * and the honest thing to tune once games get played.
+ */
+const WEIGHT: Record<string, number> = {
+  pawn: 0.30, knight: 0.20, bishop: 0.16, rook: 0.14, queen: 0.12, king: 0.08,
+};
+
 export const CIV_NAMES = [
   "hun", "roman", "greek", "persian",
   "egyptian", "norse", "swiss", "byzantine",
@@ -50,11 +63,36 @@ const TABLE: Record<string, Row> = {
   maximum_mana:          [   0,     0,    -5,      0,    15,    -5,     5,      5 ], //   +5
   base_move_cost:        [   0,   -10,     0,     10,     0,     0,     0,     10 ], //   -5
   distance_cost:         [   0,     0,    16,    -24,     8,     0,     0,      0 ], //   -8
-  preparation_period:    [   0,     0,   -10,      0,    20,   -20,    10,     10 ], //  -10
-  cooldown:              [  10,   -10,     0,     10,     0,     0,     0,    -20 ], //  -10
-  movement_speed:        [  20,   -20,     0,      0,     0,    10,   -20,      0 ], //  +10
-  movement_freedom_deg:  [  15,   -15,    30,      0,     0,     0,     0,      0 ], //  +15
+  preparation_period:    [   0,     0,   -10,      0,    24,   -20,    10,   12.4], //  -10
+  cooldown:              [  13,   -10,     0,   13.5,     0,     0,     0,    -20 ], //  -10
+  movement_speed:        [  20,   -26,     0,      0,     0,    10, -20.5,      0 ], //  +10
+  movement_freedom_deg:  [  15,   -15,  34.2,      0,     0,     0,     0,      0 ], //  +15
 };
+
+/** [piece type, param, percent] per civ. Not every civ has one. */
+const PIECE_TABLE: Record<string, [string, string, number][]> = {
+  hun:       [["knight", "cooldown",           -15]],  // steppe cavalry
+  roman:     [["pawn",   "base_move_cost",     -10]],  // the legion is the army
+  greek:     [["rook",   "movement_speed",     -20]],  // no tradition of siege
+  persian:   [["rook",   "distance_cost",      -20]],  // chariots on open roads
+  egyptian:  [["king",   "base_move_cost",     -25]],  // the pharaoh is the state
+  norse:     [],
+  swiss:     [["pawn",   "cooldown",           -15],   // pikemen, endlessly
+              ["knight", "preparation_period", +20]],  // and famously no horse
+  byzantine: [["king",   "preparation_period", -30]],  // the emperor behind walls
+};
+
+const round = (v: number) => Math.round(v * 1000) / 1000;
+
+/** Absolute per-piece overrides for the payload, derived from resolved params. */
+export function piecePayload(base: Params, civ: string): Record<string, Record<string, number>> {
+  const out: Record<string, Record<string, number>> = {};
+  for (const [piece, param, pct] of PIECE_TABLE[civ] ?? []) {
+    if (base[param] === undefined) continue;
+    (out[piece] ??= {})[param] = round(base[param] * (1 + pct / 100));
+  }
+  return out;
+}
 
 /** Percent changes per civ, zeros dropped. Exported so the UI can explain a pick. */
 export const PERCENTS: Record<string, Record<string, number>> = Object.fromEntries(
@@ -68,10 +106,15 @@ export const PERCENTS: Record<string, Record<string, number>> = Object.fromEntri
   ]),
 );
 
-/** What a civ spends, in points. Zero means it is on budget. */
+/** What a civ spends, in points, across both tables. Zero means on budget. */
 export function points(civ: string): number {
-  return Object.entries(PERCENTS[civ] ?? {})
+  const global = Object.entries(PERCENTS[civ] ?? {})
     .reduce((total, [key, pct]) => total + pct / PER_POINT[key], 0);
+  const perPiece = (PIECE_TABLE[civ] ?? []).reduce(
+    (total, [piece, param, pct]) => total + (pct / PER_POINT[param]) * WEIGHT[piece],
+    0,
+  );
+  return round(global + perPiece);
 }
 
 /** Civ names whose points do not balance — empty when the table is sound. */

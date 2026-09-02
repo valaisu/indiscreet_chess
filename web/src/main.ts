@@ -8,8 +8,8 @@ import { interpolate } from "./interp.ts";
 import { snapDestination, findPieceAt, type Piece } from "./geometry.ts";
 import * as P from "./protocol.ts";
 import { presetParams } from "./presets.ts";
-import { withCiv } from "./civs.ts";
-import { type GameState, perOwner } from "./protocol.ts";
+import { withCiv, piecePayload } from "./civs.ts";
+import { type GameState, forPiece } from "./protocol.ts";
 
 const CLICK_R_SELECT = 0.5; // forgiving radius when nothing is selected
 const CLICK_R_SWITCH = 0.3; // strict radius once a piece is selected
@@ -202,7 +202,10 @@ function readParams(): object {
     const value = parseFloat(input.value);
     if (!Number.isNaN(value)) params[input.dataset.param!] = value;
   }
-  return params;
+  // A civ may single out a piece type. Those are derived from the fields above
+  // rather than shown, so they follow whatever the fields currently say.
+  const pieces = piecePayload(params, civSel.value);
+  return Object.keys(pieces).length ? { ...params, pieces } : params;
 }
 
 function enterGame(): void {
@@ -220,7 +223,7 @@ function playable(): boolean {
 
 /** Try to move `sel` to the click; true if the move was sent. */
 function tryMove(sel: Piece, bx: number, by: number): boolean {
-  const freedom = perOwner(state!.freedom_deg, sel.owner, 5.0);
+  const freedom = forPiece(state!, sel, "movement_freedom_deg", state!.freedom_deg, 5.0);
   const snap = snapDestination(bx, by, sel, freedom, state!.pieces);
   if (!Number.isFinite(snap.d) || snap.d > MOVE_SNAP_MAX) return false;
   net.queueMove(sel.id, snap.x, snap.y);
