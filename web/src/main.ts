@@ -12,6 +12,8 @@ import { type GameState, perOwner } from "./protocol.ts";
 const CLICK_R_SELECT = 0.5; // forgiving radius when nothing is selected
 const CLICK_R_SWITCH = 0.3; // strict radius once a piece is selected
 const MOVE_SNAP_MAX = 0.625; // ignore clicks further than this from a legal spot
+const RECONNECT_TRIES = 10; // 10 x 3s covers both a Fly deploy and the 30s grace
+const RECONNECT_DELAY_MS = 3000;
 
 const DEFAULT_URL =
   (import.meta as any).env?.VITE_SERVER_URL ??
@@ -32,8 +34,13 @@ let selectedId: string | null = null;
 let dragId: string | null = null;
 let dragPos: [number, number] | null = null;
 let dragWasSelected = false;
+let rejoining = false;
+let rejoinAttempts = 0;
+let retryTimer: number | null = null;
+let stale = false; // server speaks a protocol this bundle does not
 
 function setStatus(text: string, isError = false): void {
+  if (stale) return; // a version warning outranks routine lobby chatter
   statusEl.textContent = text;
   statusEl.classList.toggle("error", isError);
 }
@@ -47,13 +54,28 @@ async function ensureConnected(): Promise<boolean> {
   if (net) return true;
   const url = ($("server-url") as HTMLInputElement).value.trim() || DEFAULT_URL;
   net = new Net(url);
-  net.on(P.ERROR, (m) => setStatus(m.reason ?? "server error", true));
+  net.on(P.ERROR, (m) => {
+    if (rejoining) {
+      // Rooms live only in the server's memory. If it restarted, the game is
+      // gone and no amount of retrying brings it back — say so and stop.
+      rejoining = false;
+      sessionStorage.removeItem("seat");
+      showBanner("Game ended \u2014 the server restarted");
+      return;
+    }
+    setStatus(m.reason ?? "server error", true);
+  });
   net.on(P.ROOM_CREATED, (m) => {
     setStatus(m.solo ? "Solo game starting…" : `Room ${m.code} — waiting for opponent`);
     ($("room-code") as HTMLInputElement).value = m.code;
     if (!m.solo) history.replaceState(null, "", `#${m.code}`);
   });
-  net.on(P.ROOM_JOINED, (m) => setStatus(`Joined ${m.code} as ${m.color}`));
+  net.on(P.ROOM_JOINED, (m) => {
+    rejoining = false;
+    rejoinAttempts = 0;
+    showBanner("");
+    setStatus(`Joined ${m.code} as ${m.color}`);
+  });
   net.on(P.ROOM_STATE, (m) => {
     if (m.waiting) setStatus(`Room ${m.code} — ${m.players}/2 players`);
   });
@@ -69,7 +91,24 @@ async function ensureConnected(): Promise<boolean> {
     stopLeftCountdown();
     showBanner("");
   });
-  net.on("close", () => showBanner("Disconnected"));
+  net.on("version-mismatch", () => {
+    // The banner only exists on the game screen, and a mismatch is noticed at
+    // connect time — usually still in the lobby. Say it in both places, and
+    // set the flag last so setStatus can pin it against later messages.
+    const text = "New version available \u2014 reload the page";
+    showBanner(text);
+    setStatus(text, true);
+    stale = true;
+  });
+  net.on("close", () => {
+    if (stale || !savedSeat() || state?.game_over) {
+      if (!stale) showBanner("Disconnected");
+      return;
+    }
+    // A retry already owns the reconnect; this close is that attempt failing.
+    if (rejoining) scheduleRetry();
+    else beginRejoin();
+  });
 
   try {
     await net.connect();
@@ -95,6 +134,47 @@ function startLeftCountdown(seconds: number): void {
 function stopLeftCountdown(): void {
   if (leftTimer !== null) window.clearInterval(leftTimer);
   leftTimer = null;
+}
+
+// --- reconnect --------------------------------------------------------------
+
+function savedSeat(): { code: string; token: string } | null {
+  const saved = sessionStorage.getItem("seat");
+  return saved ? JSON.parse(saved) : null;
+}
+
+function beginRejoin(): void {
+  rejoining = true;
+  rejoinAttempts = 0;
+  retry();
+}
+
+function scheduleRetry(): void {
+  // connect() rejecting and the socket closing both land here; run once.
+  if (retryTimer !== null) return;
+  retryTimer = window.setTimeout(() => {
+    retryTimer = null;
+    retry();
+  }, RECONNECT_DELAY_MS);
+}
+
+function retry(): void {
+  const seat = savedSeat();
+  if (stale || !seat) {
+    rejoining = false;
+    return;
+  }
+  if (rejoinAttempts >= RECONNECT_TRIES) {
+    rejoining = false;
+    showBanner("Disconnected \u2014 reload to start a new game");
+    return;
+  }
+  rejoinAttempts += 1;
+  showBanner(`Reconnecting\u2026 (${rejoinAttempts}/${RECONNECT_TRIES})`);
+  net
+    .connect()
+    .then(() => net.rejoin(seat.code, seat.token))
+    .catch(scheduleRetry);
 }
 
 function readParams(): object {
@@ -241,17 +321,12 @@ canvas.addEventListener("contextmenu", (e) => {
 });
 
 // Mobile browsers suspend sockets on backgrounding, so reclaim the seat on
-// wake rather than letting the grace window run out.
+// wake rather than letting the grace window run out. Returning to the tab is a
+// fresh signal, so it restarts an attempt budget the close handler used up.
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible" || !net) return;
-  if (!net.isClosed()) return;
-  const saved = sessionStorage.getItem("seat");
-  if (!saved) return;
-  const { code, token } = JSON.parse(saved);
-  net
-    .connect()
-    .then(() => net.rejoin(code, token))
-    .catch(() => showBanner("Reconnect failed"));
+  if (!net.isClosed() || rejoining || !savedSeat()) return;
+  beginRejoin();
 });
 window.addEventListener("resize", () => renderer?.resize());
 window.addEventListener("keydown", (e) => {

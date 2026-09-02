@@ -7,7 +7,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "deploy": "vite build && wrangler pages deploy dist --project-name=indiscreet-chess"
+    "deploy": "vite build && wrangler deploy"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

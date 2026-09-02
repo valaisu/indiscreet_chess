@@ -1,3 +1,8 @@
+# Bumped whenever a message shape changes in a way old clients cannot handle.
+# The server announces it on connect so a browser holding a stale cached bundle
+# says "reload" instead of failing in ways that look like game bugs.
+VERSION = 1
+
 # --- In-game messages (unchanged) ---
 HELLO = "HELLO"
 READY = "READY"
@@ -29,6 +34,7 @@ ROOM_STATE = "ROOM_STATE"
 OPPONENT_LEFT = "OPPONENT_LEFT"
 OPPONENT_REJOINED = "OPPONENT_REJOINED"
 PONG = "PONG"
+SERVER_HELLO = "SERVER_HELLO"
 
 # Room codes use an alphabet without visually ambiguous characters.
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"

@@ -282,12 +282,11 @@ async def run_hostile(url: str) -> list[tuple[str, bool, str]]:
     async def expect_error(label: str, msg: dict) -> None:
         async with _connect(url) as ws:
             await ws.send(json.dumps(msg))
-            try:
-                reply = json.loads(await asyncio.wait_for(ws.recv(), timeout=3))
-                ok = reply.get("type") == protocol.ERROR
-                results.append((label, ok, reply.get("reason", reply.get("type", "?"))))
-            except asyncio.TimeoutError:
-                results.append((label, False, "no reply"))
+            # The server greets every connection with SERVER_HELLO, so read past
+            # it rather than treating the first frame as the answer.
+            reply = await _await_msg(ws, {protocol.ERROR}, 3)
+            results.append((label, reply is not None,
+                            reply.get("reason", "?") if reply else "no reply"))
 
     await expect_error("out-of-range param",
                        {"type": protocol.CREATE_ROOM, "params": {"maximum_mana": 1e9}})
@@ -304,9 +303,9 @@ async def run_hostile(url: str) -> list[tuple[str, bool, str]]:
     # Malformed JSON must not kill the connection.
     async with websockets.connect(url) as ws:
         await ws.send("{not json")
-        reply = json.loads(await asyncio.wait_for(ws.recv(), timeout=3))
-        results.append(("malformed json", reply.get("type") == protocol.ERROR,
-                        reply.get("reason", "?")))
+        reply = await _await_msg(ws, {protocol.ERROR}, 3)
+        results.append(("malformed json", reply is not None,
+                        reply.get("reason", "?") if reply else "no reply"))
 
     # Flood: the server should close the socket rather than fall over. Poll for
     # the close instead of assuming one fixed delay, which a WAN round trip and

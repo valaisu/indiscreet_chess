@@ -1,4 +1,7 @@
 // Mirrors shared/protocol.py. Keep in sync.
+// Must equal VERSION in shared/protocol.py; deploy.sh refuses to ship a mismatch.
+export const VERSION = 1;
+
 export const QUEUE_MOVE = "QUEUE_MOVE";
 export const GAME_STATE = "GAME_STATE";
 export const MOVE_REJECTED = "MOVE_REJECTED";
@@ -17,6 +20,7 @@ export const ROOM_STATE = "ROOM_STATE";
 export const OPPONENT_LEFT = "OPPONENT_LEFT";
 export const OPPONENT_REJOINED = "OPPONENT_REJOINED";
 export const PONG = "PONG";
+export const SERVER_HELLO = "SERVER_HELLO";
 
 import type { Piece } from "./geometry.ts";
 

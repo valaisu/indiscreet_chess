@@ -165,6 +165,7 @@ class Hub:
 
         conn = Connection(ws, ip)
         self.conns.add(conn)
+        await conn.send({"type": protocol.SERVER_HELLO, "version": protocol.VERSION})
         window_start, window_count = time.monotonic(), 0
 
         try:

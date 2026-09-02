@@ -48,6 +48,11 @@ export class Net {
           this.rtt = Math.round(performance.now() - msg.t);
           return;
         }
+        if (msg.type === P.SERVER_HELLO) {
+          // A cached bundle can outlive the server it was built against.
+          if (msg.version !== P.VERSION) this.emit("version-mismatch", msg);
+          return;
+        }
         if (msg.type === P.ROOM_CREATED || msg.type === P.ROOM_JOINED) {
           this.code = msg.code;
           this.color = msg.color;
