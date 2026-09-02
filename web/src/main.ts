@@ -7,6 +7,7 @@ import { Renderer } from "./render.ts";
 import { interpolate } from "./interp.ts";
 import { snapDestination, findPieceAt, type Piece } from "./geometry.ts";
 import * as P from "./protocol.ts";
+import { presetParams } from "./presets.ts";
 import { type GameState, perOwner } from "./protocol.ts";
 
 const CLICK_R_SELECT = 0.5; // forgiving radius when nothing is selected
@@ -177,6 +178,16 @@ function retry(): void {
     .catch(scheduleRetry);
 }
 
+/** Write a mode's params into the settings fields; "custom" leaves them be. */
+function applyMode(mode: string): void {
+  const params = presetParams(mode);
+  if (!params) return;
+  for (const input of document.querySelectorAll<HTMLInputElement>("[data-param]")) {
+    const value = params[input.dataset.param!];
+    if (value !== undefined) input.value = String(value);
+  }
+}
+
 function readParams(): object {
   const params: Record<string, number> = {};
   for (const input of document.querySelectorAll<HTMLInputElement>("[data-param]")) {
@@ -305,6 +316,18 @@ $("btn-solo").addEventListener("click", async () => {
 ($("server-url") as HTMLInputElement).addEventListener("change", (e) => {
   localStorage.setItem("serverUrl", (e.target as HTMLInputElement).value);
 });
+
+const modeSel = $("mode") as HTMLSelectElement;
+modeSel.addEventListener("change", () => applyMode(modeSel.value));
+// Editing any field by hand means the settings are no longer a named mode.
+for (const input of document.querySelectorAll<HTMLInputElement>("[data-param]")) {
+  input.addEventListener("input", () => {
+    modeSel.value = "custom";
+  });
+}
+// The fields are marked up with the server defaults; start them on the
+// selected mode so what is shown is what will be sent.
+applyMode(modeSel.value);
 
 canvas.addEventListener("pointerdown", onPointerDown);
 canvas.addEventListener("pointermove", onPointerMove);

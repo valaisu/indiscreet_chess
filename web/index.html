@@ -19,7 +19,7 @@
       h1 { font-size: 1.5rem; margin: 0; }
       p.lede { margin: 0; color: #9a9a9a; font-size: 0.9rem; line-height: 1.5; }
       label { display: block; font-size: 0.8rem; color: #9a9a9a; margin-bottom: 0.25rem; }
-      input {
+      input, select {
         width: 100%; padding: 0.6rem; border-radius: 6px; font-size: 1rem;
         border: 1px solid #444; background: #2a2a2a; color: #eee;
       }
@@ -75,6 +75,16 @@
       </div>
 
       <div id="status"></div>
+
+      <div>
+        <label for="mode">Tempo</label>
+        <select id="mode">
+          <option value="bullet">Bullet — time to recapture</option>
+          <option value="rapid">Rapid — time to dodge a long move</option>
+          <option value="slow">Slow — time to intercept a moving piece</option>
+          <option value="custom">Custom</option>
+        </select>
+      </div>
 
       <details>
         <summary>Game settings</summary>
