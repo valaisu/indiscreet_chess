@@ -1,59 +1,62 @@
 /**
- * Print every civilization as a table and check it is on budget.
+ * Print every civilization as one table and check it is on budget.
  *
  *   node --experimental-strip-types tools/civ_table.mjs
  *
- * Percentages are against the base civilization, which is a column of zeros.
- * Points are the common currency that makes rows comparable: 10% off a
- * cooldown is worth more than 10% more max mana, and a per-piece effect is
- * discounted by how often that piece actually moves. Every civ should total
- * zero. Exits non-zero if any does not.
+ * Cells are % against the base civilization, which is all zeros. Rows naming a
+ * piece apply to that piece only. The "pt" column is the % that buys one point
+ * of goodness, so its sign tells you which direction helps: cooldown is -10,
+ * meaning a negative cell is a buff. The last row is what each civ spends, and
+ * it must be zero. Exits non-zero if any civ is off budget.
  */
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const src = join(dirname(fileURLToPath(import.meta.url)), "..", "web", "src");
 const { PRESETS } = await import(join(src, "presets.ts"));
-const {
-  CIV_NAMES, PERCENTS, PIECE_TABLE, PER_POINT,
-  globalPoints, piecePoints, points, unbalanced,
-} = await import(join(src, "civs.ts"));
+const { CIV_NAMES, PERCENTS, PIECE_TABLE, PER_POINT, points, unbalanced } =
+  await import(join(src, "civs.ts"));
 
 const civs = [...CIV_NAMES];
-const cell = (s) => String(s).padStart(11);
-const num = (v) => (Math.round(v * 1000) / 1000).toFixed(2);
+const LABEL = 26;
+const COL = 10;
+const pad = (s) => String(s).padStart(COL);
 
-console.log("\nGlobal modifiers — % against the base civilization\n");
-console.log("param".padEnd(22) + civs.map(cell).join(""));
-for (const key of Object.keys(PRESETS.bullet)) {
-  const row = civs.map((c) => {
-    const v = PERCENTS[c][key];
-    return cell(v === undefined ? "·" : `${v > 0 ? "+" : ""}${v}%`);
-  });
-  console.log(key.padEnd(22) + row.join(""));
-}
+// One row per modifier: the global params first, then any piece-specific ones.
+const rows = Object.keys(PRESETS.bullet).map((param) => ({
+  label: param,
+  rate: PER_POINT[param],
+  value: (civ) => PERCENTS[civ][param],
+}));
 
-console.log("\nPer-piece effects\n");
-const rows = civs.flatMap((civ) =>
-  (PIECE_TABLE[civ] ?? []).map(([piece, param, pct]) => ({ civ, piece, param, pct })));
-if (rows.length === 0) console.log("  (none)");
-for (const { civ, piece, param, pct } of rows) {
-  const helps = pct / PER_POINT[param] > 0;
-  console.log(
-    `  ${civ.padEnd(11)}${piece.padEnd(8)}${param.padEnd(22)}` +
-    `${((pct > 0 ? "+" : "") + pct + "%").padStart(7)}   ${helps ? "buff" : "debuff"}`,
-  );
-}
-
-console.log("\nBudget — points spent, must total zero\n");
-console.log("civ".padEnd(13) + "global".padStart(9) + "per-piece".padStart(11) + "total".padStart(9));
+const seen = new Set();
 for (const civ of civs) {
-  console.log(
-    civ.padEnd(13) + num(globalPoints(civ)).padStart(9) +
-    num(piecePoints(civ)).padStart(11) + num(points(civ)).padStart(9),
-  );
+  for (const [piece, param] of PIECE_TABLE[civ] ?? []) {
+    const key = `${piece} ${param}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push({
+      label: key,
+      rate: PER_POINT[param],
+      value: (c) =>
+        (PIECE_TABLE[c] ?? []).find(([p, a]) => p === piece && a === param)?.[2],
+    });
+  }
 }
-console.log("base".padEnd(13) + num(0).padStart(9) + num(0).padStart(11) + num(0).padStart(9));
+
+console.log("\n% against base civ. Row's `pt` sign shows which way is better.\n");
+console.log("modifier".padEnd(LABEL) + "pt".padStart(4) + civs.map((c) => pad(c)).join(""));
+for (const row of rows) {
+  const cells = civs.map((civ) => {
+    const v = row.value(civ);
+    return pad(v === undefined ? "·" : `${v > 0 ? "+" : ""}${v}%`);
+  });
+  console.log(row.label.padEnd(LABEL) + String(row.rate).padStart(4) + cells.join(""));
+}
+console.log(
+  "points spent".padEnd(LABEL) + "".padStart(4) +
+  civs.map((c) => pad(points(c).toFixed(2))).join(""),
+);
 
 const bad = unbalanced();
 console.log("");
@@ -61,4 +64,4 @@ if (bad.length) {
   console.error(`OFF BUDGET: ${bad.map((c) => `${c} = ${points(c)}`).join(", ")}`);
   process.exit(1);
 }
-console.log(`On budget: all ${civs.length} civilizations total 0 points.\n`);
+console.log(`On budget: all ${civs.length} civilizations spend 0 points.\n`);
