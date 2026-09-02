@@ -1,6 +1,6 @@
 // Mirrors shared/protocol.py. Keep in sync.
 // Must equal VERSION in shared/protocol.py; deploy.sh refuses to ship a mismatch.
-export const VERSION = 2;
+export const VERSION = 3;
 
 export const QUEUE_MOVE = "QUEUE_MOVE";
 export const GAME_STATE = "GAME_STATE";
@@ -11,6 +11,7 @@ export const CREATE_ROOM = "CREATE_ROOM";
 export const JOIN_ROOM = "JOIN_ROOM";
 export const QUICK_MATCH = "QUICK_MATCH";
 export const REJOIN = "REJOIN";
+export const SET_READY = "SET_READY";
 export const LEAVE_ROOM = "LEAVE_ROOM";
 export const PING = "PING";
 
@@ -36,6 +37,8 @@ export interface GameState {
   player_params?: Record<string, { base_move_cost: number; distance_cost: number }>;
   /** owner -> piece type -> param overrides. Only what a civ actually changes. */
   piece_params?: Record<string, Record<string, Record<string, number>>>;
+  /** Revealed only once the game starts, never during selection. */
+  civs?: Record<string, string | null>;
   countdown: number | null;
   game_over: boolean;
   winner: string | null;

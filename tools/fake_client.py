@@ -125,6 +125,10 @@ class FakeClient:
                 self.code = msg.get("code")
                 self.color = msg.get("color")
                 self.token = msg.get("token")
+                # Rooms wait for both seats to confirm before starting, so a
+                # bot that never readies would just sit in the pre-game screen.
+                await self.send({"type": protocol.SET_READY, "ready": True,
+                                 "civ": None, "params": {}})
                 self.room_ready.set()
             elif kind == protocol.MOVE_REJECTED:
                 self.rejected += 1
@@ -183,6 +187,12 @@ async def run_pair(url: str, duration: float, index: int) -> dict:
     }
 
 
+async def _ready(ws) -> None:
+    """Confirm a seat. Rooms no longer start until both sides have."""
+    await ws.send(json.dumps({"type": protocol.SET_READY, "ready": True,
+                              "civ": None, "params": {}}))
+
+
 async def _await_msg(ws, kinds: set[str], timeout: float) -> dict | None:
     """Read until one of `kinds` arrives, or give up."""
     async def pump():
@@ -210,6 +220,8 @@ async def run_disconnect(url: str, grace: float) -> list[tuple[str, bool, str]]:
         joined = await _await_msg(guest, {protocol.ROOM_JOINED}, 5)
         results.append(("seats differ", created["color"] != joined["color"],
                         f"{created['color']} vs {joined['color']}"))
+        await _ready(host)
+        await _ready(guest)
 
         await _await_msg(host, {protocol.GAME_STATE}, 8)
         await guest.close()
@@ -245,6 +257,8 @@ async def run_rejoin(url: str, grace: float) -> list[tuple[str, bool, str]]:
         await guest.send(json.dumps({"type": protocol.JOIN_ROOM, "code": code}))
         joined = await _await_msg(guest, {protocol.ROOM_JOINED}, 5)
         token = joined["token"]
+        await _ready(host)
+        await _ready(guest)
 
         await _await_msg(host, {protocol.GAME_STATE}, 8)
         await guest.close()

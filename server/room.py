@@ -67,8 +67,15 @@ class Room:
         self.code = code
         self.public = public
         self.solo = solo
-        self.game = GameState(solo=solo, params_white=params_white,
-                              params_black=params_black)
+        # Built at start, not now: each player picks a civilization in the
+        # pre-game screen, so their params are not known until both are ready.
+        self.params: dict[str, dict] = {"white": params_white, "black": params_black}
+        # The tempo the room was made with. Both players apply their own
+        # civilization on top of this, so a joiner does not bring their own.
+        self.base_params: dict = dict(params_white)
+        self.game: GameState | None = None
+        self.ready: dict[str, bool] = {"white": False, "black": False}
+        self.civ: dict[str, str | None] = {"white": None, "black": None}
         self.clients: dict[str, Connection | None] = {"white": None, "black": None}
         self.tokens: dict[str, str] = {}
         self.state: str = LOBBY
@@ -108,12 +115,25 @@ class Room:
                 pass
 
     async def notify_state(self) -> None:
+        # Deliberately no civ names: the pick stays hidden until the game runs.
         await self.broadcast({
             "type":    protocol.ROOM_STATE,
             "code":    self.code,
             "players": self.occupants(),
             "waiting": self.state == LOBBY,
+            "seated":  {c: self.clients[c] is not None for c in ("white", "black")},
+            "base_params": self.base_params,
+            "ready":   dict(self.ready),
         })
+
+    def set_ready(self, color: str, ready: bool, civ, params: dict) -> None:
+        """Record a seat's choice. Solo plays both seats, so it fills both."""
+        seats = ("white", "black") if self.solo else (color,)
+        for seat in seats:
+            self.ready[seat] = ready
+            self.civ[seat] = civ
+            if ready:
+                self.params[seat] = params
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -122,6 +142,12 @@ class Room:
             return
         if any(self.clients[c] is None for c in ("white", "black")):
             return
+        if not all(self.ready[c] for c in ("white", "black")):
+            return
+        self.game = GameState(solo=self.solo,
+                              params_white=self.params["white"],
+                              params_black=self.params["black"],
+                              civs=dict(self.civ))
         self.state = RUNNING
         self.task = asyncio.create_task(self._run())
         log.info("room %s starting", self.code)
@@ -160,7 +186,7 @@ class Room:
         except asyncio.CancelledError:
             return
         if (self.clients.get(color) is None and self.state == RUNNING
-                and not self.game.game_over):
+                and self.game is not None and not self.game.game_over):
             log.info("room %s: %s forfeits (disconnect timeout)", self.code, color)
             self.game.forfeit(color)
 

@@ -32,8 +32,12 @@ def _build_piece_pp(overrides: dict | None) -> dict[str, dict]:
 class GameState:
     def __init__(self, solo: bool = False,
                  params_white: dict | None = None,
-                 params_black: dict | None = None) -> None:
+                 params_black: dict | None = None,
+                 civs: dict | None = None) -> None:
         self.solo = solo
+        # Display only: which civilization each side picked, revealed to both
+        # once play begins.
+        self.civs = civs or {"white": None, "black": None}
         self.pieces: list[Piece] = initial_board()
         self._pp: dict[str, dict] = {
             "white": _build_pp(params_white),
@@ -426,6 +430,7 @@ class GameState:
                 for c in ("white", "black")
             },
             "piece_params": {c: self._piece_pp[c] for c in ("white", "black")},
+            "civs": self.civs,
             "countdown": self.countdown,
             "game_over": self.game_over,
             "winner": self.winner,

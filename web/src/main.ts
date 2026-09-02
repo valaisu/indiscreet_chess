@@ -8,7 +8,7 @@ import { interpolate } from "./interp.ts";
 import { snapDestination, findPieceAt, type Piece } from "./geometry.ts";
 import * as P from "./protocol.ts";
 import { presetParams } from "./presets.ts";
-import { withCiv, piecePayload } from "./civs.ts";
+import { withCiv, piecePayload, describe, FLAVOUR, CIV_NAMES } from "./civs.ts";
 import { type GameState, forPiece } from "./protocol.ts";
 
 const CLICK_R_SELECT = 0.5; // forgiving radius when nothing is selected
@@ -28,7 +28,7 @@ const canvas = $("board") as HTMLCanvasElement;
 const statusEl = $("status") as HTMLDivElement;
 const banner = $("banner") as HTMLDivElement;
 const modeSel = $("mode") as HTMLSelectElement;
-const civSel = $("civ") as HTMLSelectElement;
+const pregame = $("pregame") as HTMLDivElement;
 
 let net: Net;
 let renderer: Renderer;
@@ -70,21 +70,41 @@ async function ensureConnected(): Promise<boolean> {
     setStatus(m.reason ?? "server error", true);
   });
   net.on(P.ROOM_CREATED, (m) => {
-    setStatus(m.solo ? "Solo game starting…" : `Room ${m.code} — waiting for opponent`);
     ($("room-code") as HTMLInputElement).value = m.code;
     if (!m.solo) history.replaceState(null, "", `#${m.code}`);
+    showPregame(m.code);
   });
   net.on(P.ROOM_JOINED, (m) => {
     rejoining = false;
     rejoinAttempts = 0;
     showBanner("");
-    setStatus(`Joined ${m.code} as ${m.color}`);
+    showPregame(m.code);
   });
   net.on(P.ROOM_STATE, (m) => {
-    if (m.waiting) setStatus(`Room ${m.code} — ${m.players}/2 players`);
+    // The room's tempo, so a joiner applies their civ to it rather than to
+    // whatever their own lobby fields happen to say.
+    if (m.base_params) baseParams = m.base_params;
+    if (!m.waiting) return;
+    const me = net.color ?? "white";
+    const them = me === "white" ? "black" : "white";
+    const mine = m.ready?.[me];
+    // Both halves come from the server, so pressing Ready cannot leave the
+    // screen claiming something the room does not agree with.
+    const theirs = !m.seated?.[them]
+      ? "waiting for an opponent to join"
+      : m.ready?.[them]
+        ? "your opponent is ready"
+        : "your opponent is still choosing";
+    $("pg-status").textContent =
+      `${mine ? "You are ready" : "Pick a civilization, then press Ready"} — ${theirs}.`;
+    const btn = $("btn-ready") as HTMLButtonElement;
+    btn.disabled = !!mine;
+    for (const el of civCards.children) el.classList.toggle("pick", !mine);
   });
   net.on(P.GAME_STATE, (m: GameState) => {
-    if (lobby.style.display !== "none") enterGame();
+    // Gate on the board, not the lobby: the pre-game screen has already hidden
+    // the lobby by this point.
+    if (gameEl.style.display !== "block") enterGame();
     state = m;
     stateAt = performance.now();
     if (m.game_over) showBanner(m.winner === "draw" ? "Draw" : `${m.winner} wins`);
@@ -181,15 +201,59 @@ function retry(): void {
     .catch(scheduleRetry);
 }
 
+let pickedCiv = "none";
+let baseParams: Record<string, number> | null = null;
+
+/** Build a civ card. Pickable ones select; the lobby copy is read-only. */
+function civCard(civ: string, pickable: boolean): HTMLElement {
+  const card = document.createElement("div");
+  card.className = pickable ? "card pick" : "card";
+  const name = civ === "none" ? "None" : civ[0].toUpperCase() + civ.slice(1);
+  const flavour = civ === "none" ? "The base settings, unmodified." : FLAVOUR[civ];
+  const effects = civ === "none" ? [] : describe(civ);
+  card.innerHTML =
+    `<h3>${name}</h3><p class="flavour">${flavour}</p><ul>` +
+    effects
+      .map((e) => `<li class="${e.good ? "good" : "bad"}">` +
+                  `<span>${e.what}</span><span class="amt">${e.amount}</span></li>`)
+      .join("") +
+    "</ul>";
+  if (pickable) {
+    card.addEventListener("click", () => {
+      pickedCiv = civ;
+      for (const el of civCards.children) el.classList.toggle("on", el === card);
+    });
+  }
+  return card;
+}
+
+const civCards = $("civ-cards") as HTMLDivElement;
+for (const civ of ["none", ...CIV_NAMES]) civCards.append(civCard(civ, true));
+civCards.children[0].classList.add("on");
+for (const civ of CIV_NAMES) $("civ-reference").append(civCard(civ, false));
+
+/** The params this player will actually play with: room tempo plus their civ. */
+function readyParams(): object {
+  const base = baseParams ?? (readParams() as Record<string, number>);
+  const withMods = withCiv(base, pickedCiv);
+  const pieces = piecePayload(withMods, pickedCiv);
+  return Object.keys(pieces).length ? { ...withMods, pieces } : withMods;
+}
+
+function showPregame(code: string): void {
+  lobby.style.display = "none";
+  pregame.style.display = "block";
+  $("pg-code").textContent = code;
+}
+
 /**
  * Write the current mode+civ into the settings fields. "Custom" means the
  * fields were hand-set, so neither is reapplied — a civ multiplier compounds
  * if it lands on values it has already modified.
  */
 function applySettings(): void {
-  const base = presetParams(modeSel.value);
-  if (!base) return;
-  const params = withCiv(base, civSel.value);
+  const params = presetParams(modeSel.value);
+  if (!params) return;
   for (const input of document.querySelectorAll<HTMLInputElement>("[data-param]")) {
     const value = params[input.dataset.param!];
     if (value !== undefined) input.value = String(value);
@@ -202,14 +266,12 @@ function readParams(): object {
     const value = parseFloat(input.value);
     if (!Number.isNaN(value)) params[input.dataset.param!] = value;
   }
-  // A civ may single out a piece type. Those are derived from the fields above
-  // rather than shown, so they follow whatever the fields currently say.
-  const pieces = piecePayload(params, civSel.value);
-  return Object.keys(pieces).length ? { ...params, pieces } : params;
+  return params;
 }
 
 function enterGame(): void {
   lobby.style.display = "none";
+  pregame.style.display = "none";
   gameEl.style.display = "block";
   renderer = new Renderer(canvas, net.color);
   renderer.resize();
@@ -329,7 +391,12 @@ $("btn-solo").addEventListener("click", async () => {
 });
 
 modeSel.addEventListener("change", applySettings);
-civSel.addEventListener("change", applySettings);
+
+$("btn-ready").addEventListener("click", () => {
+  net.send({ type: P.SET_READY, ready: true, civ: pickedCiv === "none" ? null : pickedCiv,
+             params: readyParams() });
+  ($("btn-ready") as HTMLButtonElement).disabled = true;
+});
 // Editing any field by hand means the settings are no longer a named mode.
 for (const input of document.querySelectorAll<HTMLInputElement>("[data-param]")) {
   input.addEventListener("input", () => {

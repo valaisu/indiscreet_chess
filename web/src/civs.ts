@@ -144,3 +144,56 @@ export function withCiv(base: Params, civ: string): Params {
   const mods = CIVS[civ];
   return mods ? applyModifiers(base, mods) : base;
 }
+
+/** One line of flavour per civ, for the picker. */
+export const FLAVOUR: Record<string, string> = {
+  hun:       "Horse archers. Everywhere at once, and gone before the answer comes.",
+  roman:     "The legion. Cheap, ordered, and it never stops walking toward you.",
+  greek:     "The phalanx. Nothing gets through the front, and nothing reaches far.",
+  persian:   "Royal roads. The empire is wide and crossing it costs almost nothing.",
+  egyptian:  "Monuments. Everything takes an age to begin and then cannot be stopped.",
+  norse:     "Raiders. The sail is over the horizon before anyone rings a bell.",
+  swiss:     "The pike square. Out-waits any charge, and owns not one horse.",
+  byzantine: "Walls and patience. Beaten every century, standing every century.",
+};
+
+const LABEL: Record<string, string> = {
+  mana_refill_rate:     "Mana regen",
+  maximum_mana:         "Mana pool",
+  base_move_cost:       "Move cost",
+  distance_cost:        "Cost per distance",
+  preparation_period:   "Preparation",
+  movement_speed:       "Speed",
+  cooldown:             "Cooldown",
+  movement_freedom_deg: "Aim freedom",
+};
+
+const PLURAL: Record<string, string> = {
+  pawn: "Pawns", knight: "Knights", bishop: "Bishops",
+  rook: "Rooks", queen: "Queens", king: "King",
+};
+
+export interface Effect {
+  /** e.g. "Speed" or "Knights: cooldown" */
+  what: string;
+  /** e.g. "+20%" */
+  amount: string;
+  /** True when the change helps the player. */
+  good: boolean;
+}
+
+/** Everything a civ changes, in reading order: general first, then per piece. */
+export function describe(civ: string): Effect[] {
+  const fmt = (pct: number) => `${pct > 0 ? "+" : "\u2212"}${Math.abs(pct)}%`;
+  const general = Object.entries(PERCENTS[civ] ?? {}).map(([param, pct]) => ({
+    what: LABEL[param] ?? param,
+    amount: fmt(pct),
+    good: pct / PER_POINT[param] > 0,
+  }));
+  const perPiece = (PIECE_TABLE[civ] ?? []).map(([piece, param, pct]) => ({
+    what: `${PLURAL[piece] ?? piece}: ${(LABEL[param] ?? param).toLowerCase()}`,
+    amount: fmt(pct),
+    good: pct / PER_POINT[param] > 0,
+  }));
+  return [...general, ...perPiece];
+}

@@ -110,6 +110,24 @@ class Hub:
         })
         log.info("room %s: %s rejoined", code, color)
 
+    async def on_set_ready(self, conn: Connection, msg: dict) -> None:
+        room = conn.room
+        if room is None or room.state != room_mod.LOBBY or conn.color is None:
+            return
+        p = msg.get("params")
+        reason = params.validate_params(p)
+        if reason:
+            log.warning("rejected ready params from %s: %s", conn.ip, reason)
+            await conn.error(reason)
+            return
+        civ = msg.get("civ")
+        if civ is not None and (not isinstance(civ, str) or len(civ) > 20):
+            await conn.error("bad civ")
+            return
+        room.set_ready(conn.color, bool(msg.get("ready")), civ, p or {})
+        await room.notify_state()
+        room.start_if_ready()
+
     async def on_queue_move(self, conn: Connection, msg: dict) -> None:
         room = conn.room
         if room is None or room.state != RUNNING:
@@ -144,6 +162,8 @@ class Hub:
             await self.on_join(conn, msg)
         elif kind == protocol.QUICK_MATCH:
             await self.on_quick_match(conn, msg)
+        elif kind == protocol.SET_READY:
+            await self.on_set_ready(conn, msg)
         elif kind == protocol.REJOIN:
             await self.on_rejoin(conn, msg)
         elif kind == protocol.LEAVE_ROOM:

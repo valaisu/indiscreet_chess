@@ -37,6 +37,24 @@
       #status.error { color: #d98080; }
       #game { display: none; position: relative; height: 100dvh; }
       #board { width: 100%; height: 100%; display: block; touch-action: none; }
+      #pregame { display: none; max-width: 46rem; margin: 0 auto; padding: 2rem 1.25rem; }
+      .cards { display: grid; gap: 0.6rem; margin: 0.75rem 0;
+               grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); }
+      .card { border: 1px solid #3a3a3a; border-radius: 8px; padding: 0.7rem 0.8rem;
+              background: #262626; }
+      .card.pick { cursor: pointer; }
+      .card.pick:hover { border-color: #5a5a7a; }
+      .card.on { border-color: #6f8fbf; background: #2b3242; }
+      .card h3 { margin: 0 0 0.2rem; font-size: 0.95rem; }
+      .card .flavour { margin: 0 0 0.5rem; font-size: 0.78rem; color: #9a9a9a;
+                       line-height: 1.35; }
+      .card ul { margin: 0; padding: 0; list-style: none; font-size: 0.8rem; }
+      .card li { display: flex; justify-content: space-between; gap: 0.5rem;
+                 padding: 0.1rem 0; }
+      .card li .amt { font-variant-numeric: tabular-nums; }
+      .good .amt { color: #8ac08a; }
+      .bad .amt { color: #d98080; }
+      #pg-status { min-height: 1.5rem; font-size: 0.9rem; color: #9a9a9a; }
       #banner {
         display: none; position: absolute; top: 1rem; left: 50%;
         transform: translateX(-50%); background: rgba(0,0,0,0.75);
@@ -86,20 +104,10 @@
         </select>
       </div>
 
-      <div>
-        <label for="civ">Civilization</label>
-        <select id="civ">
-          <option value="none">None — base settings</option>
-          <option value="hun">Hun — horse archers: fast and wide, no logistics</option>
-          <option value="roman">Roman — legion: cheap and relentless, ponderous</option>
-          <option value="greek">Greek — phalanx: precise angles, poor at range</option>
-          <option value="persian">Persian — royal roads: distance is cheap, starting is not</option>
-          <option value="egyptian">Egyptian — monumental: vast reserve, slow to commit</option>
-          <option value="norse">Norse — raiders: strike with no warning, no staying power</option>
-          <option value="swiss">Swiss — pike wall: deepest purse, slowest army</option>
-          <option value="byzantine">Byzantine — resilient: acts again soonest, costly to begin</option>
-        </select>
-      </div>
+      <details>
+        <summary>What the civilizations do</summary>
+        <div id="civ-reference" class="cards"></div>
+      </details>
 
       <details>
         <summary>Game settings</summary>
@@ -146,6 +154,17 @@
           </div>
         </div>
       </details>
+    </div>
+
+    <div id="pregame">
+      <h1>Room <span id="pg-code"></span></h1>
+      <p class="lede">
+        Pick a civilization. Your opponent cannot see your choice until the
+        game begins.
+      </p>
+      <div id="civ-cards" class="cards"></div>
+      <button id="btn-ready" class="primary">Ready</button>
+      <div id="pg-status"></div>
     </div>
 
     <div id="game">
