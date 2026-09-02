@@ -27,7 +27,7 @@ step "typecheck"
 (cd web && npm run typecheck)
 
 step "geometry parity"
-python3 tools/parity_test.py
+PYTHONPATH=. python3 tools/parity_test.py   # tools import `server`
 
 step "server"
 # --ha=false: a second machine would strand the two halves of a game.

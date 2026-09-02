@@ -28,7 +28,7 @@ import type { Modifiers, Params } from "./presets.ts";
 import { applyModifiers } from "./presets.ts";
 
 /** Percent that buys one point of goodness. Sign is the helpful direction. */
-const PER_POINT: Record<string, number> = {
+export const PER_POINT: Record<string, number> = {
   mana_refill_rate:       +3,
   maximum_mana:           +5,
   base_move_cost:         -5,
@@ -70,7 +70,7 @@ const TABLE: Record<string, Row> = {
 };
 
 /** [piece type, param, percent] per civ. Not every civ has one. */
-const PIECE_TABLE: Record<string, [string, string, number][]> = {
+export const PIECE_TABLE: Record<string, [string, string, number][]> = {
   hun:       [["knight", "cooldown",           -15]],  // steppe cavalry
   roman:     [["pawn",   "base_move_cost",     -10]],  // the legion is the army
   greek:     [["rook",   "movement_speed",     -20]],  // no tradition of siege
@@ -106,15 +106,23 @@ export const PERCENTS: Record<string, Record<string, number>> = Object.fromEntri
   ]),
 );
 
-/** What a civ spends, in points, across both tables. Zero means on budget. */
-export function points(civ: string): number {
-  const global = Object.entries(PERCENTS[civ] ?? {})
+/** Points spent by the modifiers that apply to every piece. */
+export function globalPoints(civ: string): number {
+  return Object.entries(PERCENTS[civ] ?? {})
     .reduce((total, [key, pct]) => total + pct / PER_POINT[key], 0);
-  const perPiece = (PIECE_TABLE[civ] ?? []).reduce(
+}
+
+/** Points spent singling out piece types, discounted by how often they move. */
+export function piecePoints(civ: string): number {
+  return (PIECE_TABLE[civ] ?? []).reduce(
     (total, [piece, param, pct]) => total + (pct / PER_POINT[param]) * WEIGHT[piece],
     0,
   );
-  return round(global + perPiece);
+}
+
+/** What a civ spends in total. Zero means on budget. */
+export function points(civ: string): number {
+  return round(globalPoints(civ) + piecePoints(civ));
 }
 
 /** Civ names whose points do not balance — empty when the table is sound. */
