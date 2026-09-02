@@ -4,6 +4,8 @@
 
 A real-time chess variant where both players move simultaneously on a continuous board. Instead of taking turns, you spend mana to queue moves and everything happens simultaneously.
 
+**[Play in your browser](https://indiscreet-chess.indiscreet-chess-web.workers.dev)** — nothing to install. Create a room and share the code, or take whoever is waiting.
+
 ## How It's Different From Regular Chess
 
 - **Real-time, not turn-based.** Both players act simultaneously.
