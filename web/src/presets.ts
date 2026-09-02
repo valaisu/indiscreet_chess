@@ -9,11 +9,10 @@
  * Modifiers are multiplicative and compose, so a later "civilisation" layer is
  * one more Modifiers map passed to applyModifiers; no structural change here.
  *
- * diameter_piece is deliberately absent. The server applies it per player
- * (server/game.py:37), but the client hardcodes 0.6 in geometry.ts and
- * render.ts and GAME_STATE never sends it, so a mode that changed it would
- * draw the wrong move hints and offer moves the server then rejects. It has to
- * travel in the game state before it can join this table.
+ * diameter_piece is in the table but the same across modes: tempo is about
+ * time, not size. It has to be here even so — applyModifiers only touches keys
+ * the base already has, so a civilization can only resize pieces if the mode
+ * named a size to start from.
  */
 
 export type Params = Record<string, number>;
@@ -33,6 +32,7 @@ const TABLE: Record<string, [number, number, number]> = {
   cooldown:              [ 0.7,    1.0,     1.3   ],  // 0.8
   movement_speed:        [ 4.5,    2.0,     1.0   ],  // 4.0
   movement_freedom_deg:  [ 5.0,    5.0,     5.0   ],  // 5.0
+  diameter_piece:        [ 0.6,    0.6,     0.6   ],  // 0.6
 };
 
 export const PRESETS: Record<string, Params> = Object.fromEntries(

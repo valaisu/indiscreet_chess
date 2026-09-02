@@ -40,6 +40,10 @@ class Piece:
     # Castling
     castling_partner_id: str = ""    # ID of king/rook partner during castling transit
     pending_castling_rook_id: str = ""  # set on king during PREPARATION for a castling move
+    # Set when a move is queued, not derived from the piece's type: a pawn can
+    # promote in mid-flight, and a queen must not lose the immunity and the
+    # arrival burst that the move it is still executing was queued under.
+    diagonal_capture: bool = False   # this move is a pawn's diagonal capture
     # En passant ghost creation
     is_double_move: bool = False     # this move is a pawn double-step
     ghost_created: bool = False      # ghost has already been spawned for this move
@@ -119,6 +123,9 @@ class Piece:
             "vel_x": round(self.vel_x, 4),
             "vel_y": round(self.vel_y, 4),
             "has_moved": self.has_moved,
+            # Hitbox size travels with the piece: a civilization may change it
+            # per piece type, and the client draws and snaps moves with it.
+            "d": round(self.diameter, 4),
         }
 
 
@@ -133,6 +140,40 @@ _BACK_RANK = [
     PieceType.KNIGHT,
     PieceType.ROOK,
 ]
+
+
+def start_overlap_reason(p: dict | None) -> str | None:
+    """Reject settings whose opening position already has pieces touching.
+
+    Neighbouring pieces start exactly one square apart, so any two hitboxes
+    summing to a diameter of one square or more are in contact before the game
+    begins: everything is blocked, half the moves are illegal, and the physics
+    is resolving contacts on tick one. Sizes are per piece type, so the limit
+    is not a single number and has to be measured on the real layout.
+
+    Checked per player — the two sides start five squares apart, and no
+    permitted size comes close to closing that.
+    """
+    p = p or {}
+    base = p.get("diameter_piece", params.DIAMETER_PIECE)
+    per_type = {
+        kind: overrides.get("diameter_piece", base)
+        for kind, overrides in (p.get("pieces") or {}).items()
+        if isinstance(overrides, dict)
+    }
+
+    board = initial_board()
+    for piece in board:
+        piece.diameter = per_type.get(piece.type.value, base)
+
+    for i, a in enumerate(board):
+        for b in board[i + 1:]:
+            if a.owner != b.owner:
+                continue
+            if math.hypot(a.x - b.x, a.y - b.y) <= a.radius + b.radius + 1e-9:
+                return (f"pieces would start touching: {a.type.value} and "
+                        f"{b.type.value} — reduce piece size")
+    return None
 
 
 def initial_board() -> list[Piece]:

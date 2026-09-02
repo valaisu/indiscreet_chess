@@ -1,5 +1,5 @@
 """
-Indiscreet Chess — client entry point.
+Continuous Chess — client entry point.
 
 Run from project root:
     python -m client.main
@@ -411,7 +411,7 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
     )
     net_thread.start()
 
-    pygame.display.set_caption("Indiscreet Chess")
+    pygame.display.set_caption("Continuous Chess")
     clock = pygame.time.Clock()
 
     renderer        = Renderer(player_color=None if solo else player_color,
@@ -550,7 +550,7 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
 def main() -> None:
     pygame.init()
     screen = pygame.display.set_mode((WIN_W, WIN_H), pygame.RESIZABLE)
-    pygame.display.set_caption("Indiscreet Chess")
+    pygame.display.set_caption("Continuous Chess")
 
     while True:
         config = run_menu(screen)

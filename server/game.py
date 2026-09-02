@@ -3,7 +3,7 @@ import math
 
 from . import params, physics
 from .pieces import Piece, PieceType, PieceState, initial_board
-from .rules import validate_move
+from .rules import validate_move, is_forward_pawn_move
 from shared.protocol import GAME_STATE, MOVE_REJECTED, GAME_OVER
 
 
@@ -32,8 +32,17 @@ def _build_piece_pp(overrides: dict | None) -> dict[str, dict]:
 class GameState:
     def __init__(self, solo: bool = False,
                  params_white: dict | None = None,
-                 params_black: dict | None = None) -> None:
+                 params_black: dict | None = None,
+                 civs: dict | None = None,
+                 view: dict | None = None) -> None:
         self.solo = solo
+        # What each side may learn about the other. Enforced here, in the one
+        # place that builds the snapshot, rather than in the renderer: what a
+        # client is sent, a client knows.
+        self.view = params.build_view(view)
+        # Display only: which civilization each side picked, revealed to both
+        # once play begins.
+        self.civs = civs or {"white": None, "black": None}
         self.pieces: list[Piece] = initial_board()
         self._pp: dict[str, dict] = {
             "white": _build_pp(params_white),
@@ -114,12 +123,14 @@ class GameState:
     # ------------------------------------------------------------------
 
     async def run(self, broadcast_fn) -> None:
+        """broadcast_fn receives this GameState, not a dict: each player gets a
+        snapshot built for them (see to_dict)."""
         tick_dt = 1.0 / params.TICK_RATE
         loop = asyncio.get_event_loop()
 
         for n in (3, 2, 1, 0):
             self.countdown = n
-            await broadcast_fn(self.to_dict())
+            await broadcast_fn(self)
             await asyncio.sleep(1.0 if n > 0 else 0.5)
 
         self.countdown = None
@@ -128,11 +139,11 @@ class GameState:
         while not self.game_over:
             t0 = loop.time()
             self._tick(tick_dt)
-            await broadcast_fn(self.to_dict())
+            await broadcast_fn(self)
             elapsed = loop.time() - t0
             await asyncio.sleep(max(0.0, tick_dt - elapsed))
 
-        await broadcast_fn(self.to_dict())
+        await broadcast_fn(self)
 
     def _tick(self, dt: float) -> None:
         self.tick += 1
@@ -219,6 +230,16 @@ class GameState:
                 if rook:
                     piece.pending_castling_rook_id = rook.id
 
+        # Stamp the kind of pawn move onto the piece. The physics needs to know
+        # whether this is a diagonal capture — immune in flight, resolved as a
+        # burst on arrival — and a pawn can promote before it gets there, so
+        # this cannot be re-derived from the piece's type later.
+        piece.diagonal_capture = (
+            piece.type == PieceType.PAWN
+            and not is_forward_pawn_move(piece, move["dest_x"], move["dest_y"],
+                                         pp["movement_freedom_deg"])
+        )
+
         # Detect pawn double move.
         if piece.type == PieceType.PAWN and not piece.has_moved:
             if abs(move["dest_y"] - piece.y) > params.SQUARE_SIDE + 1e-6:
@@ -267,15 +288,28 @@ class GameState:
     # ------------------------------------------------------------------
 
     def _check_promotions(self) -> None:
+        """A pawn promotes when its centerpoint reaches the last rank — not
+        when the edge of its hitbox touches it, which promoted a large pawn
+        most of a square early and made promotion depend on piece size.
+
+        Nothing here touches capture_remaining or state_timer: promotion
+        changes what a piece is, never what its current move has already spent.
+        The move in flight keeps its budget, and only the next _start_moving
+        refills it.
+        """
         s = params.SQUARE_SIDE
         for piece in self.pieces:
             if piece.type != PieceType.PAWN:
                 continue
-            r = piece.diameter / 2.0
-            if piece.owner == "white" and piece.y - r < s:
+            if piece.owner == "white" and piece.y < s:
                 piece.type = PieceType.QUEEN
-            elif piece.owner == "black" and piece.y + r > 7.0 * s:
+            elif piece.owner == "black" and piece.y > 7.0 * s:
                 piece.type = PieceType.QUEEN
+            else:
+                continue
+            # A civilization may size piece types differently, so the new queen
+            # takes the queen's hitbox rather than keeping the pawn's.
+            piece.diameter = self._pf(piece)["diameter_piece"]
 
     # ------------------------------------------------------------------
     # En passant
@@ -408,13 +442,34 @@ class GameState:
     # Serialisation
     # ------------------------------------------------------------------
 
-    def to_dict(self) -> dict:
+    def _visible_piece(self, piece: Piece, viewer: str | None) -> dict:
+        """One piece as `viewer` is allowed to see it. A piece whose phase is
+        hidden looks idle, and loses its destination with it — the marker is
+        the same information by another route."""
+        d = piece.to_dict()
+        if viewer is None or piece.owner == viewer or piece.type == PieceType.GHOST:
+            return d
+        hidden = ((d["state"] == "preparation" and not self.view["enemy_prep"])
+                  or (d["state"] == "cooldown" and not self.view["enemy_cooldown"]))
+        if hidden:
+            d["state"] = "idle"
+            d["state_timer"] = 0.0
+        if hidden or (d["state"] != "idle" and not self.view["enemy_dest"]):
+            d["dest_x"] = d["x"]
+            d["dest_y"] = d["y"]
+        return d
+
+    def to_dict(self, viewer: str | None = None) -> dict:
+        """Snapshot for one player, or the whole truth when viewer is None
+        (solo play, where one client holds both seats)."""
+        colors = ("white", "black")
+        shown = colors if (viewer is None or self.view["enemy_mana"]) else (viewer,)
         return {
             "type": GAME_STATE,
             "tick": self.tick,
-            "pieces": [p.to_dict() for p in self.pieces],
-            "mana": {k: round(v, 3) for k, v in self.mana.items()},
-            "max_mana":    {c: self._pp[c]["maximum_mana"] for c in ("white", "black")},
+            "pieces": [self._visible_piece(p, viewer) for p in self.pieces],
+            "mana": {c: round(self.mana[c], 3) for c in shown},
+            "max_mana":    {c: self._pp[c]["maximum_mana"] for c in shown},
             "freedom_deg": {c: self._pp[c]["movement_freedom_deg"] for c in ("white", "black")},
             "prep_period": {c: self._pp[c]["preparation_period"] for c in ("white", "black")},
             "cooldown":    {c: self._pp[c]["cooldown"] for c in ("white", "black")},
@@ -426,6 +481,7 @@ class GameState:
                 for c in ("white", "black")
             },
             "piece_params": {c: self._piece_pp[c] for c in ("white", "black")},
+            "civs": self.civs,
             "countdown": self.countdown,
             "game_over": self.game_over,
             "winner": self.winner,

@@ -120,6 +120,16 @@ def _check_castling(piece: Piece, dx: float,
     return None
 
 
+def is_forward_pawn_move(piece: Piece, dest_x: float, dest_y: float,
+                         freedom_deg: float) -> bool:
+    """True if this destination is a plain forward push rather than a diagonal
+    capture. Decided once, when the move is queued, because the piece may not
+    still be a pawn when it lands."""
+    forward_dy = -1.0 if piece.owner == "white" else 1.0
+    return _in_sector(dest_x - piece.x, dest_y - piece.y,
+                      [(0.0, forward_dy)], freedom_deg)
+
+
 def _check_pawn(piece: Piece, dest_x: float, dest_y: float,
                 dx: float, dy: float, all_pieces: list[Piece],
                 freedom_deg: float) -> str | None:

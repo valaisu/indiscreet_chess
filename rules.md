@@ -1,4 +1,4 @@
-# RTS Chess — Rules
+# Continuous Chess — Rules
 
 ## Parameters
 
@@ -11,7 +11,7 @@ The following values are left open as tunable parameters:
 | `base_move_cost` | Flat mana cost component per move |
 | `distance_cost` | Mana cost per unit of move distance |
 | `movement_freedom_degrees` | Angular tolerance (±degrees) around legal movement directions |
-| `diameter_piece` | Diameter of each piece's circular hitbox |
+| `diameter_piece` | Diameter of each piece's circular hitbox. May vary per piece type. Rejected if the opening position would have any two pieces touching, which means the sum of two neighbours' diameters must be under one square |
 | `square_side_length` | Side length of one board square |
 | `preparation_period` | Seconds between queuing a move and the piece starting to move |
 | `movement_speed` | Speed at which a piece travels to its destination |
@@ -94,10 +94,10 @@ If both pieces are moving at the moment their hitboxes touch, both pieces are re
 If a moving piece captures an enemy piece and is not itself captured, it continues moving in the same direction — stopping at whichever comes first: the point where the captured piece's centerpoint lies on a perpendicular to the direction of movement, or the piece's original destination. It then stops (and enters cooldown).
 
 ### Capture Limit
-Each piece may capture at most one enemy piece per move execution. **Exceptions**: the Knight (see Knight rules below) and a Pawn executing a diagonal capture (see Pawn — Diagonal Capture).
+Each piece may capture at most one enemy piece per move execution. **Exception**: the Knight (see Knight rules below), which clears everything it lands on. A Pawn executing a diagonal capture resolves its capture on arrival rather than on contact, but still spends only the one.
 
 ### Friendly Pieces
-Non-Knight pieces cannot capture friendly pieces. A moving piece that would collide with a friendly piece stops at the point of contact (hitboxes touching) instead. **Exceptions**: a Pawn executing a diagonal capture may land on and remove friendly pieces.
+Non-Knight pieces cannot capture friendly pieces. A moving piece that would collide with a friendly piece stops at the point of contact (hitboxes touching) instead. This has no exceptions: a Pawn executing a diagonal capture is blocked by its own side like anything else, even though enemies cannot touch it.
 
 ### Blocking by Uncapturable Pieces
 A moving piece also stops at the point of contact if it would collide with any piece it cannot capture at that moment — including pieces it has already passed its capture budget for. **Exception**: a Pawn executing a diagonal capture is never blocked during travel.
@@ -124,9 +124,9 @@ The player specifies any point inside one of these circles as the destination, s
 
 **Legality:** A destination point D is legal if and only if, at the moment the move is queued, at least one **enemy** piece has its center within `diameter_piece` of D — i.e. the Pawn's hitbox would overlap that piece upon landing. Friendly pieces do not satisfy this condition. Only the portion of the circle satisfying this condition is available; the remainder is illegal. If no enemy piece exists anywhere near the circle, the move cannot be queued at all.
 
-**During travel:** While the Pawn is moving toward its diagonal destination it cannot capture and cannot be captured. It passes through all pieces without interaction and is never blocked.
+**During travel:** While the Pawn is moving toward its diagonal destination it cannot capture and cannot be captured. It passes through enemy pieces without interaction. Friendly pieces do stop it: on contact with one it halts there, hitboxes touching, and the move ends having captured nothing. With the default piece size only a friend at or beside the landing point is near enough to the path to interfere; larger pieces get in each other's way more.
 
-**On arrival:** The Pawn captures every piece — friend or foe — whose hitbox overlaps its landing position. If any of those pieces were themselves moving at the moment of arrival, the Pawn is also removed (in addition to capturing them).
+**On arrival:** The Pawn captures exactly one enemy piece — the one whose centre is nearest the landing position, among enemies whose hitboxes overlap it. Friendly pieces are never captured. If that piece was itself moving at the moment of arrival, the Pawn is also removed (in addition to capturing it). Pieces immune during their own travel (a Knight in flight, another diagonally capturing Pawn) are not eligible targets and are passed over.
 
 **If targets move away:** If no piece remains within capture range of the landing position when the Pawn arrives, the Pawn completes its move and remains at the destination having captured nothing.
 
@@ -136,7 +136,9 @@ When a Pawn executes a double move, it leaves a **ghost** at the point where its
 The ghost disappears when the opponent queues a move for the first time after the double-moving Pawn has finished its movement, and that queued move is not one targeting the ghost. Until this window closes, the double-moved Pawn may continue moving and can still be removed via en passant.
 
 ### Pawn — Promotion
-When a Pawn's hitbox enters the last rank, it immediately promotes to a Queen. Any movement already in progress continues uninterrupted, completing the previously queued move vector under Queen rules.
+When a Pawn's **centerpoint** enters the last rank, it promotes to a Queen. Any movement already in progress continues uninterrupted, completing the previously queued move vector.
+
+Promotion changes the piece, never the move it is executing. A move queued as a diagonal capture keeps its immunity in flight and still resolves as an arrival capture even if the Pawn has become a Queen on the way, and the capture budget already spent by that move is not refilled — only the next move refills it.
 
 ### King — Castling
 Castling is available when neither the King nor the relevant Rook has previously moved. It is initiated by queuing a King move of more than 1 and at most 2 squares directly sideways along its rank.

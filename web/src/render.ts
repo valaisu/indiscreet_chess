@@ -5,7 +5,7 @@
  * (8,8) bottom-right (white back rank).
  */
 
-import { canCastle, type Piece } from "./geometry.ts";
+import { canCastle, DIAMETER_PIECE, type Piece } from "./geometry.ts";
 import { type GameState, forPiece } from "./protocol.ts";
 
 const C_BG = "#1e1e1e";
@@ -31,9 +31,13 @@ const C_WIN_TEXT = "#ffdc64";
 const C_HINT_OK = "rgba(100,210,100,0.31)";      // legal and affordable
 const C_HINT_NO_MANA = "rgba(220,140,40,0.31)";  // legal direction, too far for the mana
 const C_HINT_ILLEGAL = "rgba(180,60,60,0.31)";   // not currently legal
+// Precise mode repaints the same wedges heavier, so the mode is visible at a
+// glance rather than being a key you have to remember you are holding.
+const C_HINT_OK_STRONG = "rgba(120,235,120,0.6)";
+const C_HINT_NO_MANA_STRONG = "rgba(230,150,45,0.6)";
+const C_HINT_ILLEGAL_STRONG = "rgba(200,70,70,0.6)";
 
 const SQRT2 = Math.SQRT2;
-const DIAMETER_PIECE = 0.6;
 const ORTHO: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const DIAG: [number, number][] = [[1, 1], [1, -1], [-1, 1], [-1, -1]].map(
   ([x, y]) => [x / SQRT2, y / SQRT2] as [number, number],
@@ -67,9 +71,10 @@ export class Renderer {
   private sq = 80;
   private boardX = 0;
   private boardY = 0;
-  private pieceR = 24;
   private manaH = 22;
   flipped = false;
+  /** off: draw none. on: the usual translucent wedges. strong: precise mode. */
+  hints: "off" | "on" | "strong" = "on";
 
   constructor(private canvas: HTMLCanvasElement, public playerColor: string | null) {
     this.ctx = canvas.getContext("2d")!;
@@ -88,10 +93,22 @@ export class Renderer {
     const w = rect.width;
     const h = rect.height;
     this.sq = Math.max(8, Math.floor(Math.min(w / 9.2, h / 9.9)));
-    this.pieceR = Math.max(4, Math.round(this.sq * 0.3));
     this.manaH = Math.max(6, Math.round(this.sq * 0.275));
     this.boardX = Math.round((w - this.sq * 8) / 2);
     this.boardY = Math.round((h - this.sq * 8) / 2 + this.manaH * 0.6);
+  }
+
+  /** A piece's drawn radius in pixels. Hitboxes can differ per piece type. */
+  private radiusPx(p: { d?: number }): number {
+    return Math.max(4, Math.round(((p.d ?? DIAMETER_PIECE) / 2) * this.sq));
+  }
+
+  private hintColor(base: string): string {
+    if (this.hints !== "strong") return base;
+    if (base === C_HINT_OK) return C_HINT_OK_STRONG;
+    if (base === C_HINT_NO_MANA) return C_HINT_NO_MANA_STRONG;
+    if (base === C_HINT_ILLEGAL) return C_HINT_ILLEGAL_STRONG;
+    return base;
   }
 
   boardToPx(bx: number, by: number): [number, number] {
@@ -181,7 +198,7 @@ export class Renderer {
     ctx.moveTo(cx, cy);
     ctx.arc(cx, cy, r, angle - half, angle + half);
     ctx.closePath();
-    ctx.fillStyle = color;
+    ctx.fillStyle = this.hintColor(color);
     ctx.fill();
   }
 
@@ -199,7 +216,7 @@ export class Renderer {
   }
 
   private drawMoveHints(state: GameState, selectedId: string | null): void {
-    if (!selectedId) return;
+    if (!selectedId || this.hints === "off") return;
     const piece = state.pieces.find((p) => p.id === selectedId);
     if (!piece || piece.state !== "idle") return;
 
@@ -232,7 +249,8 @@ export class Renderer {
         const [px2, py2] = this.boardToPx(tx, ty);
         ctx.beginPath();
         ctx.arc(px2, py2, rPx, 0, Math.PI * 2);
-        ctx.fillStyle = Math.hypot(a, b) <= maxDist ? C_HINT_OK : C_HINT_NO_MANA;
+        ctx.fillStyle = this.hintColor(
+          Math.hypot(a, b) <= maxDist ? C_HINT_OK : C_HINT_NO_MANA);
         ctx.fill();
       }
     } else if (ptype === "pawn") {
@@ -242,6 +260,7 @@ export class Renderer {
 
       // Diagonal capture landing circles: red overall, with the arc that a
       // reachable enemy actually opens painted on top.
+      const pawnD = piece.d ?? DIAMETER_PIECE;
       const diagRBoard = SQRT2 * Math.tan(fr);
       const diagRPx = Math.max(4, diagRBoard * this.sq);
       const diagColor = SQRT2 <= maxDist ? C_HINT_OK : C_HINT_NO_MANA;
@@ -253,7 +272,7 @@ export class Renderer {
         const [ccxPx, ccyPx] = this.boardToPx(ccxB, ccyB);
         ctx.beginPath();
         ctx.arc(ccxPx, ccyPx, diagRPx, 0, Math.PI * 2);
-        ctx.fillStyle = C_HINT_ILLEGAL;
+        ctx.fillStyle = this.hintColor(C_HINT_ILLEGAL);
         ctx.fill();
 
         for (const other of state.pieces) {
@@ -261,13 +280,13 @@ export class Renderer {
           const odx = other.x - ccxB;
           const ody = other.y - ccyB;
           const otherD = Math.hypot(odx, ody);
-          if (otherD > diagRBoard + DIAMETER_PIECE + 1e-6) continue;
+          if (otherD > diagRBoard + pawnD + 1e-6) continue;
           let alpha: number;
           if (otherD < 1e-9) {
             alpha = Math.PI;
           } else {
             const cosA =
-              (diagRBoard * diagRBoard + otherD * otherD - DIAMETER_PIECE * DIAMETER_PIECE) /
+              (diagRBoard * diagRBoard + otherD * otherD - pawnD * pawnD) /
               (2 * diagRBoard * otherD);
             if (cosA >= 1.0) continue;
             alpha = Math.acos(Math.max(-1, cosA));
@@ -307,7 +326,7 @@ export class Renderer {
       if (dx === undefined) continue;
       const [cx, cy] = this.boardToPx(dx, dy);
       ctx.beginPath();
-      ctx.arc(cx, cy, Math.max(3, this.pieceR * 0.35), 0, Math.PI * 2);
+      ctx.arc(cx, cy, Math.max(3, this.radiusPx(p) * 0.35), 0, Math.PI * 2);
       ctx.fillStyle = C_DEST_MARKER;
       ctx.fill();
     }
@@ -316,7 +335,7 @@ export class Renderer {
       if (sel) {
         const [cx, cy] = this.boardToPx(sel.x, sel.y);
         ctx.beginPath();
-        ctx.arc(cx, cy, this.pieceR + 5, 0, Math.PI * 2);
+        ctx.arc(cx, cy, this.radiusPx(sel) + 5, 0, Math.PI * 2);
         ctx.strokeStyle = C_SELECT;
         ctx.lineWidth = 3;
         ctx.stroke();
@@ -328,10 +347,11 @@ export class Renderer {
                     atPx: [number, number] | null = null): void {
     const ctx = this.ctx;
     const [cx, cy] = atPx ?? this.boardToPx(p.x, p.y);
+    const r = this.radiusPx(p);
 
     if (p.type === "ghost") {
       ctx.beginPath();
-      ctx.arc(cx, cy, this.pieceR, 0, Math.PI * 2);
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
       ctx.fillStyle = C_GHOST_FILL + "70";
       ctx.fill();
       ctx.strokeStyle = C_GHOST_FILL;
@@ -342,7 +362,7 @@ export class Renderer {
 
     const isWhite = p.owner === "white";
     ctx.beginPath();
-    ctx.arc(cx, cy, this.pieceR, 0, Math.PI * 2);
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.fillStyle = isWhite ? C_WHITE_FILL : C_BLACK_FILL;
     ctx.fill();
     ctx.strokeStyle = isWhite ? C_BLACK_BORDER : C_WHITE_BORDER;
@@ -350,14 +370,14 @@ export class Renderer {
     ctx.stroke();
 
     ctx.fillStyle = isWhite ? C_WHITE_ICON : C_BLACK_ICON;
-    ctx.font = `${Math.round(this.pieceR * 1.6)}px "DejaVu Sans", "Segoe UI Symbol", sans-serif`;
+    ctx.font = `${Math.round(r * 1.6)}px "DejaVu Sans", "Segoe UI Symbol", sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(ICONS[`${p.type}/${p.owner}`] ?? "?", cx, cy);
 
     if (p.state === "cooldown") {
       ctx.beginPath();
-      ctx.arc(cx, cy, this.pieceR, 0, Math.PI * 2);
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
       ctx.fillStyle = "rgba(0,0,0,0.39)";
       ctx.fill();
     }
@@ -365,19 +385,20 @@ export class Renderer {
     const timer = p.state_timer ?? 0;
     if (p.state === "preparation") {
       const total = forPiece(state, p, "preparation_period", state.prep_period, 0.5);
-      if (total > 0) this.drawTimerArc(cx, cy, 1 - timer / total, C_TIMER_PREP);
+      if (total > 0) this.drawTimerArc(cx, cy, r, 1 - timer / total, C_TIMER_PREP);
     } else if (p.state === "cooldown") {
       const total = forPiece(state, p, "cooldown", state.cooldown, 0.8);
-      if (total > 0) this.drawTimerArc(cx, cy, 1 - timer / total, C_TIMER_COOL);
+      if (total > 0) this.drawTimerArc(cx, cy, r, 1 - timer / total, C_TIMER_COOL);
     }
   }
 
-  private drawTimerArc(cx: number, cy: number, fraction: number, color: string): void {
+  private drawTimerArc(cx: number, cy: number, r: number, fraction: number,
+                       color: string): void {
     if (fraction <= 0) return;
     const ctx = this.ctx;
     const f = Math.min(1, fraction);
     ctx.beginPath();
-    ctx.arc(cx, cy, this.pieceR + 4, -Math.PI / 2, -Math.PI / 2 + f * Math.PI * 2);
+    ctx.arc(cx, cy, r + 4, -Math.PI / 2, -Math.PI / 2 + f * Math.PI * 2);
     ctx.strokeStyle = color;
     ctx.lineWidth = 3;
     ctx.stroke();
@@ -387,11 +408,14 @@ export class Renderer {
     const ctx = this.ctx;
     const barW = this.sq * 8;
     const x = this.boardX;
-    const showBoth = this.playerColor === null;
+    // The server sends only the pools this player may see, so the presence of
+    // a key is the permission: no separate flag to keep in step with it.
     const own = this.playerColor ?? "white";
+    const other = own === "white" ? "black" : "white";
+    const showBoth = state.mana?.[other] !== undefined;
     const rows: [string, number][] = showBoth
-      ? [["black", this.boardY - this.manaH - 6],
-         ["white", this.boardY + this.sq * 8 + 6]]
+      ? [[other, this.boardY - this.manaH - 6],
+         [own, this.boardY + this.sq * 8 + 6]]
       : [[own, this.boardY + this.sq * 8 + 6]];
 
     for (const [color, y] of rows) {

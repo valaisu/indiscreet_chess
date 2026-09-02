@@ -20,6 +20,7 @@ import websockets
 from websockets.asyncio.server import serve
 
 from . import params, room as room_mod
+from .pieces import start_overlap_reason
 from .room import Connection, RoomManager, RUNNING
 from shared import protocol
 
@@ -110,6 +111,26 @@ class Hub:
         })
         log.info("room %s: %s rejoined", code, color)
 
+    async def on_set_ready(self, conn: Connection, msg: dict) -> None:
+        room = conn.room
+        if room is None or room.state != room_mod.LOBBY or conn.color is None:
+            return
+        p = msg.get("params")
+        # A civilization is applied client-side, so this is where a piece-size
+        # modifier lands: the opening position has to be checked here too.
+        reason = params.validate_params(p) or start_overlap_reason(p)
+        if reason:
+            log.warning("rejected ready params from %s: %s", conn.ip, reason)
+            await conn.error(reason)
+            return
+        civ = msg.get("civ")
+        if civ is not None and (not isinstance(civ, str) or len(civ) > 20):
+            await conn.error("bad civ")
+            return
+        room.set_ready(conn.color, bool(msg.get("ready")), civ, p or {})
+        await room.notify_state()
+        room.start_if_ready()
+
     async def on_queue_move(self, conn: Connection, msg: dict) -> None:
         room = conn.room
         if room is None or room.state != RUNNING:
@@ -144,6 +165,8 @@ class Hub:
             await self.on_join(conn, msg)
         elif kind == protocol.QUICK_MATCH:
             await self.on_quick_match(conn, msg)
+        elif kind == protocol.SET_READY:
+            await self.on_set_ready(conn, msg)
         elif kind == protocol.REJOIN:
             await self.on_rejoin(conn, msg)
         elif kind == protocol.LEAVE_ROOM:
@@ -216,7 +239,7 @@ def client_ip(ws) -> str:
 
 async def main() -> None:
     global MAX_CONN_PER_IP
-    parser = argparse.ArgumentParser(description="Indiscreet Chess server")
+    parser = argparse.ArgumentParser(description="Continuous Chess server")
     parser.add_argument("--host", default=params.SERVER_HOST)
     parser.add_argument("--port", type=int, default=params.SERVER_PORT)
     parser.add_argument("--origin", action="append", default=None,
