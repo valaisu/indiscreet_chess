@@ -1,7 +1,7 @@
 /**
  * Dead reckoning between server ticks. Pieces travel in a straight line at a
  * constant velocity and the server sends position, velocity and the time left
- * to run, so advancing them locally is exact rather than a guess — right up to
+ * to run, so advancing them locally is exact rather than a guess - right up to
  * the moment something interrupts the move.
  *
  * There is deliberately no render delay. A jitter buffer means interpolating

@@ -1,7 +1,7 @@
 # Bumped whenever a message shape changes in a way old clients cannot handle.
 # The server announces it on connect so a browser holding a stale cached bundle
 # says "reload" instead of failing in ways that look like game bugs.
-VERSION = 4
+VERSION = 5
 
 # --- In-game messages (unchanged) ---
 HELLO = "HELLO"
@@ -26,6 +26,7 @@ QUICK_MATCH = "QUICK_MATCH"
 REJOIN = "REJOIN"
 SET_READY = "SET_READY"
 LEAVE_ROOM = "LEAVE_ROOM"
+RESIGN = "RESIGN"
 PING = "PING"
 
 # Server -> client

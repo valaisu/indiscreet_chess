@@ -8,7 +8,8 @@ import { interpolate } from "./interp.ts";
 import { snapDestination, findPieceAt, type Piece } from "./geometry.ts";
 import * as P from "./protocol.ts";
 import { presetParams } from "./presets.ts";
-import { withCiv, piecePayload, describe, FLAVOUR, CIV_NAMES } from "./civs.ts";
+import { withCiv, piecePayload, describe, TITLE, CIV_NAMES } from "./civs.ts";
+import { CIV_ICONS } from "./civicons.ts";
 import { type GameState, forPiece } from "./protocol.ts";
 import { settings, save as saveSettings, PRECISE_MIN_DRAG, VIEW_DEFAULTS,
          type View } from "./settings.ts";
@@ -20,8 +21,15 @@ const MOVE_SNAP_MAX = 0.625; // ignore clicks further than this from a legal spo
 const RECONNECT_TRIES = 10; // 10 x 3s covers both a Fly deploy and the 30s grace
 const RECONNECT_DELAY_MS = 3000;
 
-const DEFAULT_URL =
-  (import.meta as any).env?.VITE_SERVER_URL ??
+/**
+ * Which server to talk to. A player never types this: the bundle is built
+ * against the server it belongs to. `?server=ws://localhost:8765` overrides it
+ * for development, and because the override lives in the URL there is nothing
+ * persisted for a typo to get stuck on.
+ */
+const SERVER_URL =
+  new URLSearchParams(location.search).get("server") ||
+  (import.meta as any).env?.VITE_SERVER_URL ||
   `${location.protocol === "https:" ? "wss" : "ws"}://${location.hostname}:8765`;
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -30,10 +38,10 @@ const gameEl = $("game") as HTMLDivElement;
 const canvas = $("board") as HTMLCanvasElement;
 const statusEl = $("status") as HTMLDivElement;
 const banner = $("banner") as HTMLDivElement;
-const modeSel = $("mode") as HTMLSelectElement;
 const pregame = $("pregame") as HTMLDivElement;
 const postgame = $("postgame") as HTMLDivElement;
 const replayBar = $("replay-bar") as HTMLDivElement;
+const gameBar = $("game-bar") as HTMLDivElement;
 
 let net: Net;
 let renderer: Renderer;
@@ -47,10 +55,35 @@ let rejoining = false;
 let rejoinAttempts = 0;
 let retryTimer: number | null = null;
 let stale = false; // server speaks a protocol this bundle does not
+let soloRoom = false; // this client holds both seats
+let inRoom = false;   // between joining a room and leaving it
 let precise = false; // any drag distance counts as a move while this is on
 let preciseLatched = false; // the on-screen button holds it; the key only taps
-const recording = new Recording();
+let recording = new Recording();
 let player: Player | null = null; // non-null while watching the replay
+let replayReturn: "postgame" | "profile" = "postgame";
+let matchLogged = false; // one history row per game, however many final frames
+
+/**
+ * A finished game. The row is small and lives in localStorage; the recording
+ * it names is the snapshots themselves, which stay in memory. That split is
+ * deliberate: results are worth keeping and cost nothing, while a recording is
+ * megabytes and there is no database to put it in yet.
+ */
+interface Match {
+  id: string;
+  at: number;          // epoch ms
+  tempo: string;
+  civs: Record<string, string | null>;
+  seat: string | null; // the colour this client played, null in solo
+  winner: string;
+  seconds: number;
+  solo: boolean;
+}
+
+const HISTORY_KEY = "matches";
+const MAX_HISTORY = 50;
+const recordings = new Map<string, Recording>();
 
 function setStatus(text: string, isError = false): void {
   if (stale) return; // a version warning outranks routine lobby chatter
@@ -65,20 +98,19 @@ function showBanner(text: string): void {
 
 async function ensureConnected(): Promise<boolean> {
   if (net) return true;
-  const url = ($("server-url") as HTMLInputElement).value.trim() || DEFAULT_URL;
-  net = new Net(url);
+  net = new Net(SERVER_URL);
   net.on(P.ERROR, (m) => {
     if (rejoining) {
       // Rooms live only in the server's memory. If it restarted, the game is
-      // gone and no amount of retrying brings it back — say so and stop.
+      // gone and no amount of retrying brings it back - say so and stop.
       rejoining = false;
       sessionStorage.removeItem("seat");
-      showBanner("Game ended \u2014 the server restarted");
+      showBanner("Game ended: the server restarted");
       return;
     }
     // The lobby's status line is off-screen once the pre-game screen is up,
     // and a civilization can push piece size past what the opening position
-    // allows — so a rejection at Ready has to be visible where it happens.
+    // allows - so a rejection at Ready has to be visible where it happens.
     const reason = m.reason ?? "server error";
     if (pregame.style.display === "block") {
       $("pg-status").textContent = reason;
@@ -88,12 +120,16 @@ async function ensureConnected(): Promise<boolean> {
   });
   net.on(P.ROOM_CREATED, (m) => {
     ($("room-code") as HTMLInputElement).value = m.code;
+    soloRoom = !!m.solo;
+    inRoom = true;
     if (!m.solo) history.replaceState(null, "", `#${m.code}`);
     showPregame(m.code);
   });
   net.on(P.ROOM_JOINED, (m) => {
     rejoining = false;
     rejoinAttempts = 0;
+    soloRoom = !!savedSeat()?.solo;
+    inRoom = true;
     showBanner("");
     showPregame(m.code);
   });
@@ -113,12 +149,15 @@ async function ensureConnected(): Promise<boolean> {
         ? "your opponent is ready"
         : "your opponent is still choosing";
     $("pg-status").textContent =
-      `${mine ? "You are ready" : "Pick a civilization, then press Ready"} — ${theirs}.`;
+      `${mine ? "You are ready" : "Pick a civilization, then press Ready"}: ${theirs}.`;
     const btn = $("btn-ready") as HTMLButtonElement;
     btn.disabled = !!mine;
     for (const el of civCards.children) el.classList.toggle("pick", !mine);
   });
   net.on(P.GAME_STATE, (m: GameState) => {
+    // A frame can still be in flight when the room is left, and acting on it
+    // would drag the player back onto the board from the lobby.
+    if (!inRoom) return;
     // Gate on the board, not the lobby: the pre-game screen has already hidden
     // the lobby by this point.
     if (gameEl.style.display !== "block") enterGame();
@@ -127,6 +166,7 @@ async function ensureConnected(): Promise<boolean> {
     recording.push(m, stateAt);
     if (m.game_over) {
       showBanner("");
+      logMatch(m);
       showPostgame(m.winner === "draw" ? "Draw" : `${m.winner} wins`);
     }
   });
@@ -138,9 +178,9 @@ async function ensureConnected(): Promise<boolean> {
   });
   net.on("version-mismatch", () => {
     // The banner only exists on the game screen, and a mismatch is noticed at
-    // connect time — usually still in the lobby. Say it in both places, and
+    // connect time - usually still in the lobby. Say it in both places, and
     // set the flag last so setStatus can pin it against later messages.
-    const text = "New version available \u2014 reload the page";
+    const text = "New version available. Reload the page.";
     showBanner(text);
     setStatus(text, true);
     stale = true;
@@ -168,12 +208,12 @@ async function ensureConnected(): Promise<boolean> {
 let leftTimer: number | null = null;
 function startLeftCountdown(seconds: number): void {
   let left = Math.ceil(seconds);
-  showBanner(`Opponent disconnected — ${left}s`);
+  showBanner(`Opponent disconnected, ${left}s left`);
   stopLeftCountdown();
   leftTimer = window.setInterval(() => {
     left -= 1;
     if (left <= 0) stopLeftCountdown();
-    else showBanner(`Opponent disconnected — ${left}s`);
+    else showBanner(`Opponent disconnected, ${left}s left`);
   }, 1000);
 }
 function stopLeftCountdown(): void {
@@ -183,7 +223,7 @@ function stopLeftCountdown(): void {
 
 // --- reconnect --------------------------------------------------------------
 
-function savedSeat(): { code: string; token: string } | null {
+function savedSeat(): { code: string; token: string; solo?: boolean } | null {
   const saved = sessionStorage.getItem("seat");
   return saved ? JSON.parse(saved) : null;
 }
@@ -211,7 +251,7 @@ function retry(): void {
   }
   if (rejoinAttempts >= RECONNECT_TRIES) {
     rejoining = false;
-    showBanner("Disconnected \u2014 reload to start a new game");
+    showBanner("Disconnected. Reload to start a new game.");
     return;
   }
   rejoinAttempts += 1;
@@ -222,18 +262,26 @@ function retry(): void {
     .catch(scheduleRetry);
 }
 
-let pickedCiv = "none";
+/**
+ * One civilization per seat. A normal game only ever fills "white", which is
+ * this player's own pick whatever colour they were dealt; solo fills both,
+ * because the point of solo is to try two sides against each other.
+ */
+const picks: Record<"white" | "black", string> = { white: "none", black: "none" };
+let activeSeat: "white" | "black" = "white";
 let baseParams: Record<string, number> | null = null;
 
 /** Build a civ card. Pickable ones select; the lobby copy is read-only. */
 function civCard(civ: string, pickable: boolean): HTMLElement {
   const card = document.createElement("div");
   card.className = pickable ? "card pick" : "card";
+  card.dataset.civ = civ;
   const name = civ === "none" ? "None" : civ[0].toUpperCase() + civ.slice(1);
-  const flavour = civ === "none" ? "The base settings, unmodified." : FLAVOUR[civ];
   const effects = civ === "none" ? [] : describe(civ);
   card.innerHTML =
-    `<h3>${name}</h3><p class="flavour">${flavour}</p><ul>` +
+    `<div class="head">${CIV_ICONS[civ]}` +
+    `<div><h3>${name}</h3><p class="title">${TITLE[civ]}</p></div>` +
+    `<span class="tag"></span></div><ul>` +
     effects
       .map((e) => `<li class="${e.good ? "good" : "bad"}">` +
                   `<span>${e.what}</span><span class="amt">${e.amount}</span></li>`)
@@ -241,23 +289,39 @@ function civCard(civ: string, pickable: boolean): HTMLElement {
     "</ul>";
   if (pickable) {
     card.addEventListener("click", () => {
-      pickedCiv = civ;
-      for (const el of civCards.children) el.classList.toggle("on", el === card);
+      picks[activeSeat] = civ;
+      refreshPicks();
     });
   }
   return card;
 }
 
+/** Highlight the active seat's pick, and label who has taken what in solo. */
+function refreshPicks(): void {
+  for (const el of civCards.children) {
+    const civ = (el as HTMLElement).dataset.civ!;
+    el.classList.toggle("on", picks[activeSeat] === civ);
+    const taken = soloRoom
+      ? (["white", "black"] as const).filter((seat) => picks[seat] === civ)
+      : [];
+    const tag = el.querySelector(".tag") as HTMLElement;
+    tag.textContent = taken.map((seat) => (seat === "white" ? "W" : "B")).join(" ");
+    tag.title = taken.join(" and ");
+  }
+  $("seat-white").classList.toggle("on", activeSeat === "white");
+  $("seat-black").classList.toggle("on", activeSeat === "black");
+}
+
 const civCards = $("civ-cards") as HTMLDivElement;
 for (const civ of ["none", ...CIV_NAMES]) civCards.append(civCard(civ, true));
-civCards.children[0].classList.add("on");
 for (const civ of CIV_NAMES) $("civ-reference").append(civCard(civ, false));
+refreshPicks();
 
-/** The params this player will actually play with: room tempo plus their civ. */
-function readyParams(): object {
+/** The params a seat will actually play with: room tempo plus its civ. */
+function readyParams(civ: string): object {
   const base = baseParams ?? (readParams() as Record<string, number>);
-  const withMods = withCiv(base, pickedCiv);
-  const pieces = piecePayload(withMods, pickedCiv);
+  const withMods = withCiv(base, civ);
+  const pieces = piecePayload(withMods, civ);
   return Object.keys(pieces).length ? { ...withMods, pieces } : withMods;
 }
 
@@ -265,15 +329,43 @@ function showPregame(code: string): void {
   lobby.style.display = "none";
   pregame.style.display = "block";
   $("pg-code").textContent = code;
+  $("pg-seats").style.display = soloRoom ? "flex" : "none";
+  $("pg-lede").textContent = soloRoom
+    ? "You play both sides. Pick a civilization for each seat, then press Ready."
+    : "Pick a civilization. Your opponent cannot see your choice until the game begins.";
+  if (!soloRoom) activeSeat = "white";
+  refreshPicks();
 }
 
 /**
  * Write the current mode+civ into the settings fields. "Custom" means the
- * fields were hand-set, so neither is reapplied — a civ multiplier compounds
+ * fields were hand-set, so neither is reapplied - a civ multiplier compounds
  * if it lands on values it has already modified.
  */
-function applySettings(): void {
-  const params = presetParams(modeSel.value);
+/** What each tempo is for, kept out of the labels themselves. */
+const MODE_NOTE: Record<string, string> = {
+  bullet: "Enough time to recapture, and no more.",
+  rapid:  "Enough time to dodge a long move.",
+  slow:   "Enough time to intercept a piece already on its way.",
+  custom: "Enough time for whatever the parameters below say.",
+};
+
+/** The chosen tempo. "custom" means the parameter fields were hand-edited. */
+let tempo = "bullet";
+
+/**
+ * Choose a tempo. `writeFields` is false when the choice came from editing a
+ * parameter by hand: the fields are already what the player wants, and a
+ * preset would overwrite them.
+ */
+function setTempo(name: string, writeFields = true): void {
+  tempo = name;
+  for (const b of document.querySelectorAll<HTMLElement>("#tempo-bar button")) {
+    b.classList.toggle("on", b.dataset.mode === name);
+  }
+  $("mode-note").textContent = MODE_NOTE[name] ?? "";
+  if (!writeFields) return;
+  const params = presetParams(name);
   if (!params) return;
   for (const input of document.querySelectorAll<HTMLInputElement>("[data-param]")) {
     const value = params[input.dataset.param!];
@@ -303,6 +395,10 @@ function enterGame(): void {
   lobby.style.display = "none";
   pregame.style.display = "none";
   gameEl.style.display = "block";
+  gameBar.style.display = "flex";
+  matchLogged = false;
+  // Nobody to resign to when both sides are yours: exiting is the way out.
+  $("btn-resign").style.display = soloRoom ? "none" : "";
   renderer = new Renderer(canvas, net.color);
   renderer.hints = hintMode();
   renderer.resize();
@@ -346,8 +442,7 @@ function onPointerDown(ev: PointerEvent): void {
   if (!(bx >= 0 && bx < 8 && by >= 0 && by < 8)) return;
 
   const pieces = state!.pieces;
-  const solo = net.color === null;
-  const mine = (p: Piece) => solo || p.owner === net.color;
+  const mine = (p: Piece) => soloRoom || net.color === null || p.owner === net.color;
 
   // Picking up an own idle piece starts a drag; the same press also selects it,
   // so releasing in place leaves the click-click flow intact.
@@ -355,7 +450,7 @@ function onPointerDown(ev: PointerEvent): void {
   if (grabbed && grabbed.state === "idle" && mine(grabbed)) {
     if (selectedId !== null && selectedId !== grabbed.id) {
       const sel = pieces.find((p) => p.id === selectedId);
-      // A close click on a friendly piece switches rather than moves — unless
+      // A close click on a friendly piece switches rather than moves - unless
       // precise mode is on, where landing next to a piece is the whole point.
       const onPiece = !precise && findPieceAt(bx, by, pieces, CLICK_R_SWITCH);
       if (sel && !onPiece && tryMove(sel, bx, by)) {
@@ -419,24 +514,141 @@ function onPointerUp(ev: PointerEvent): void {
 
 function showPostgame(result: string): void {
   $("pg-result").textContent = result;
+  $("btn-resign").style.display = "none";
   if (player) return; // a late final frame must not cover the replay
 
   postgame.style.display = "block";
 }
 
-function startReplay(): void {
-  if (!recording.frames.length) return;
+function matchHistory(): Match[] {
+  try {
+    return JSON.parse(localStorage.getItem(HISTORY_KEY) ?? "[]");
+  } catch {
+    return []; // corrupt or cleared: an empty history is the right fallback
+  }
+}
+
+/** Which preset a room's parameters are, so a joiner labels its tempo too. */
+function tempoName(p: Record<string, number> | null): string {
+  if (!p) return tempo;
+  for (const mode of ["bullet", "rapid", "slow"]) {
+    const preset = presetParams(mode)!;
+    if (Object.entries(preset).every(([k, v]) => Math.abs((p[k] ?? NaN) - v) < 1e-6)) {
+      return mode;
+    }
+  }
+  return "custom";
+}
+
+function logMatch(final: GameState): void {
+  if (matchLogged || !recording.frames.length) return;
+  matchLogged = true;
+  const id = `m${Date.now().toString(36)}`;
+  recordings.set(id, recording);
+  const row: Match = {
+    id,
+    at: Date.now(),
+    tempo: tempoName(baseParams),
+    civs: (final.civs ?? {}) as Record<string, string | null>,
+    seat: soloRoom ? null : net.color,
+    // A game left early has no winner. Keeping the row anyway is the point:
+    // the recording is attached to it, and that is what the profile offers.
+    winner: final.game_over ? (final.winner ?? "draw") : "unfinished",
+    seconds: Math.round(recording.duration / 1000),
+    solo: soloRoom,
+  };
+  localStorage.setItem(HISTORY_KEY,
+                       JSON.stringify([row, ...matchHistory()].slice(0, MAX_HISTORY)));
+}
+
+const civLabel = (civ: string | null | undefined) =>
+  civ ? civ[0].toUpperCase() + civ.slice(1) : "None";
+
+function renderProfile(): void {
+  const rows = matchHistory();
+  const list = $("pf-list");
+  list.textContent = "";
+  const played = rows.filter((m) => !m.solo && m.winner !== "unfinished");
+  const won = played.filter((m) => m.winner === m.seat).length;
+  const drawn = played.filter((m) => m.winner === "draw").length;
+  const rest = rows.length - played.length;
+  $("pf-summary").textContent = rows.length
+    ? `${rows.length} game${rows.length === 1 ? "" : "s"}: ` +
+      `${won} won, ${played.length - won - drawn} lost, ${drawn} drawn` +
+      `${rest ? `, ${rest} solo or unfinished` : ""}.`
+    : "No games yet.";
+
+  for (const m of rows) {
+    const row = document.createElement("div");
+    row.className = "match";
+    const outcome =
+      m.winner === "unfinished" ? "Unfinished"
+      : m.solo ? (m.winner === "draw" ? "Draw" : `${civLabel(m.winner)} wins`)
+      : m.winner === "draw" ? "Draw"
+      : m.winner === m.seat ? "Won" : "Lost";
+    const cls = m.solo || m.winner === "draw" || m.winner === "unfinished"
+      ? "" : m.winner === m.seat ? "win" : "loss";
+    const sides = m.solo
+      ? `${civLabel(m.civs.white)} vs ${civLabel(m.civs.black)}`
+      : `${civLabel(m.civs[m.seat ?? "white"])} vs ` +
+        `${civLabel(m.civs[m.seat === "white" ? "black" : "white"])}`;
+    const mins = Math.floor(m.seconds / 60);
+    row.innerHTML =
+      `<span class="what"><span class="result ${cls}">${outcome}</span> ` +
+      `${m.solo ? "solo" : `as ${m.seat}`}, ${sides}` +
+      `<span class="when">${m.tempo}, ` +
+      `${mins ? `${mins}m ` : ""}${m.seconds % 60}s, ` +
+      `${new Date(m.at).toLocaleString()}</span></span>`;
+    const rec = recordings.get(m.id);
+    if (rec) {
+      const btn = document.createElement("button");
+      btn.textContent = "Watch replay";
+      btn.addEventListener("click", () =>
+        watchReplay(rec, m.solo ? null : m.seat, "profile"));
+      row.append(btn);
+    } else {
+      const gone = document.createElement("span");
+      gone.className = "gone";
+      gone.textContent = "replay expired";
+      row.append(gone);
+    }
+    list.append(row);
+  }
+}
+
+/**
+ * Watch a recording, either the game just finished or one picked out of the
+ * profile. `from` is where Close goes back to, because those are the only two
+ * places a replay can be started from.
+ */
+function watchReplay(rec: Recording, color: string | null,
+                     from: "postgame" | "profile"): void {
+  if (!rec.frames.length) return;
+  replayReturn = from;
+  lobby.style.display = "none";
+  pregame.style.display = "none";
+  gameEl.style.display = "block";
   postgame.style.display = "none";
+  gameBar.style.display = "none"; // resigning an old game means nothing
   replayBar.style.display = "flex";
   selectedId = null;
   dragId = null;
-  player = new Player(recording);
+  renderer = new Renderer(canvas, color);
+  renderer.hints = hintMode();
+  player = new Player(rec);
   setSpeed(1);
 }
 
 function exitReplay(): void {
   player = null;
   replayBar.style.display = "none";
+  if (replayReturn === "profile") {
+    gameEl.style.display = "none";
+    lobby.style.display = "flex";
+    showTab("profile");
+    return;
+  }
+  gameBar.style.display = "flex";
   postgame.style.display = "block";
 }
 
@@ -452,7 +664,7 @@ let seeking = false;
 
 function updateReplayBar(): void {
   if (!player) return;
-  const total = recording.duration;
+  const total = player.recording.duration;
   if (!seeking) seek.value = String(total ? (player.t / total) * 1000 : 0);
   // Plain shapes, not the media-control codepoints: those fall back to a
   // tofu box in fonts that lack them.
@@ -461,14 +673,102 @@ function updateReplayBar(): void {
 }
 
 /**
- * Back to the lobby. Rooms are in the server's memory and this one is over, so
- * there is nothing to keep: dropping the seat and reloading is both the
- * simplest and the most reliable way back to a clean slate.
+ * Back to the lobby. This used to reload the page, which was the simplest way
+ * to a clean slate, but it also threw away the recordings the profile now
+ * offers. So the room is left explicitly and everything the game owned is
+ * cleared by hand. The socket stays open: the server has let go of the room,
+ * so this connection can open another.
  */
-function newGame(): void {
+function exitToLobby(): void {
+  if (state) logMatch(state);
+  inRoom = false;
+  if (net) net.send({ type: P.LEAVE_ROOM });
   sessionStorage.removeItem("seat");
   history.replaceState(null, "", location.pathname + location.search);
-  location.reload();
+
+  state = null;
+  selectedId = null;
+  dragId = null;
+  dragPos = null;
+  player = null;
+  recording = new Recording();
+  matchLogged = false;
+  soloRoom = false;
+  baseParams = null;
+  rejoining = false;
+  rejoinAttempts = 0;
+  if (retryTimer !== null) {
+    window.clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+  stopLeftCountdown();
+  showBanner("");
+  setPrecise(preciseLatched = false);
+
+  postgame.style.display = "none";
+  replayBar.style.display = "none";
+  gameBar.style.display = "flex";
+  $("btn-resign").style.display = "";
+  ($("btn-ready") as HTMLButtonElement).disabled = false;
+  $("pg-status").textContent = "";
+  gameEl.style.display = "none";
+  pregame.style.display = "none";
+  lobby.style.display = "flex";
+  setStatus("");
+  showTab("play");
+}
+
+/** Show one lobby tab. The others are hidden, not unbuilt. */
+function showTab(name: string): void {
+  for (const el of document.querySelectorAll<HTMLElement>(".tab")) {
+    el.hidden = el.id !== `tab-${name}`;
+  }
+  for (const b of document.querySelectorAll<HTMLElement>("#tabs button")) {
+    b.classList.toggle("on", b.dataset.tab === name);
+  }
+  // One scroll container behind all four tabs, so a new tab would otherwise
+  // open at wherever the last one was left.
+  $("lobby-body").scrollTop = 0;
+  if (name === "profile") renderProfile();
+}
+
+/** True while a real game is running that leaving would abandon. */
+function gameInProgress(): boolean {
+  return !!state && !state.game_over && !soloRoom;
+}
+
+/**
+ * Give up. Sending is not enough on its own: a reload can close the socket
+ * before the frame leaves, so the exit waits a moment for it. Failing that,
+ * the disconnect grace window ends the game anyway, just 30 seconds later.
+ */
+function resign(): void {
+  net.send({ type: P.RESIGN });
+}
+
+/**
+ * A second press before acting, with the question on the button itself. A
+ * confirm() dialog would block the page, and resigning by misclick is exactly
+ * the thing worth one extra press.
+ */
+function armed(btn: HTMLButtonElement, question: string,
+               live: () => boolean, action: () => void): void {
+  const label = btn.textContent!;
+  let timer: number | null = null;
+  const reset = () => {
+    btn.textContent = label;
+    if (timer !== null) window.clearTimeout(timer);
+    timer = null;
+  };
+  btn.addEventListener("click", () => {
+    if (live() && timer === null) {
+      btn.textContent = question;
+      timer = window.setTimeout(reset, 4000);
+      return;
+    }
+    reset();
+    action();
+  });
 }
 
 // --- render loop ------------------------------------------------------------
@@ -488,9 +788,6 @@ function frame(): void {
 
 // --- wiring -----------------------------------------------------------------
 
-($("server-url") as HTMLInputElement).value =
-  localStorage.getItem("serverUrl") ?? DEFAULT_URL;
-
 $("btn-create").addEventListener("click", async () => {
   if (await ensureConnected()) net.createRoom(readParams(), false, readView());
 });
@@ -505,29 +802,68 @@ $("btn-quick").addEventListener("click", async () => {
 $("btn-solo").addEventListener("click", async () => {
   if (await ensureConnected()) net.createRoom(readParams(), true, readView());
 });
-($("server-url") as HTMLInputElement).addEventListener("change", (e) => {
-  localStorage.setItem("serverUrl", (e.target as HTMLInputElement).value);
-});
+for (const b of document.querySelectorAll<HTMLElement>("#tempo-bar button")) {
+  b.addEventListener("click", () => setTempo(b.dataset.mode!));
+}
 
-modeSel.addEventListener("change", applySettings);
+$("seat-white").addEventListener("click", () => {
+  activeSeat = "white";
+  refreshPicks();
+});
+$("seat-black").addEventListener("click", () => {
+  activeSeat = "black";
+  refreshPicks();
+});
 
 $("btn-ready").addEventListener("click", () => {
-  net.send({ type: P.SET_READY, ready: true, civ: pickedCiv === "none" ? null : pickedCiv,
-             params: readyParams() });
+  // One message per seat. The server takes the colour only from a solo room,
+  // where this client owns both; anywhere else the seat is the one it dealt.
+  const ready = (seat: "white" | "black") => {
+    const civ = picks[seat];
+    net.send({ type: P.SET_READY, ready: true, color: seat,
+               civ: civ === "none" ? null : civ, params: readyParams(civ) });
+  };
+  if (soloRoom) {
+    ready("white");
+    ready("black");
+  } else {
+    ready("white");
+  }
   ($("btn-ready") as HTMLButtonElement).disabled = true;
 });
+$("btn-pg-exit").addEventListener("click", exitToLobby);
 // Editing any field by hand means the settings are no longer a named mode.
 for (const input of document.querySelectorAll<HTMLInputElement>("[data-param]")) {
   input.addEventListener("input", () => {
-    modeSel.value = "custom";
+    setTempo("custom", false);
   });
 }
 // The fields are marked up with the server defaults; start them on the
 // selected mode so what is shown is what will be sent.
-applySettings();
+setTempo(tempo);
 
-$("btn-replay").addEventListener("click", startReplay);
-$("btn-newgame").addEventListener("click", newGame);
+for (const b of document.querySelectorAll<HTMLElement>("#tabs button")) {
+  b.addEventListener("click", () => showTab(b.dataset.tab!));
+}
+$("btn-clear-history").addEventListener("click", () => {
+  localStorage.removeItem(HISTORY_KEY);
+  recordings.clear();
+  renderProfile();
+});
+
+$("btn-replay").addEventListener("click", () =>
+  watchReplay(recording, soloRoom ? null : net.color, "postgame"));
+$("btn-newgame").addEventListener("click", exitToLobby);
+armed($("btn-resign") as HTMLButtonElement, "Confirm resign",
+      gameInProgress, resign);
+armed($("btn-exit") as HTMLButtonElement, "Resign and exit?", gameInProgress, () => {
+  if (gameInProgress()) {
+    resign();
+    window.setTimeout(exitToLobby, 200);
+  } else {
+    exitToLobby();
+  }
+});
 $("rp-exit").addEventListener("click", exitReplay);
 $("rp-play").addEventListener("click", () => player?.toggle());
 for (const speed of SPEEDS) {
@@ -539,7 +875,7 @@ for (const speed of SPEEDS) {
 }
 seek.addEventListener("pointerdown", () => { seeking = true; });
 seek.addEventListener("input", () => {
-  if (player) player.seek((parseFloat(seek.value) / 1000) * recording.duration);
+  if (player) player.seek((parseFloat(seek.value) / 1000) * player.recording.duration);
 });
 seek.addEventListener("pointerup", () => { seeking = false; });
 
@@ -567,6 +903,14 @@ dragInput.addEventListener("change", () => {
 hintsInput.addEventListener("change", () => {
   saveSettings({ showHints: hintsInput.checked });
   if (renderer) renderer.hints = hintMode();
+});
+const preciseSel = $("s-precise") as HTMLSelectElement;
+preciseSel.value = settings.preciseKey;
+preciseSel.addEventListener("change", () => {
+  saveSettings({ preciseKey: preciseSel.value as typeof settings.preciseKey });
+  // Swapping the key while the old one is held would leave precise mode on
+  // with nothing left to release it.
+  if (precise && !preciseLatched) setPrecise(false);
 });
 
 for (const input of document.querySelectorAll<HTMLInputElement>("[data-view]")) {

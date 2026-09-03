@@ -3,14 +3,14 @@
  *
  * TABLE is meant to be hand-edited. One row per parameter, one column per
  * mode, so the modes can be compared and tuned against each other directly.
- * Nothing is derived from anything else — a number here is exactly what the
+ * Nothing is derived from anything else - a number here is exactly what the
  * server receives.
  *
  * Modifiers are multiplicative and compose, so a later "civilisation" layer is
  * one more Modifiers map passed to applyModifiers; no structural change here.
  *
  * diameter_piece is in the table but the same across modes: tempo is about
- * time, not size. It has to be here even so — applyModifiers only touches keys
+ * time, not size. It has to be here even so - applyModifiers only touches keys
  * the base already has, so a civilization can only resize pieces if the mode
  * named a size to start from.
  */
@@ -23,16 +23,16 @@ export const MODES = ["bullet", "rapid", "slow"] as const;
 
 /** Column order matches MODES. Server defaults are in server/params.py. */
 const TABLE: Record<string, [number, number, number]> = {
-  //                      bullet   rapid    slow      (default)
-  mana_refill_rate:      [ 0.35,   0.15,    0.075 ],  // 0.3
-  maximum_mana:          [ 5.0,    5.0,     5.0   ],  // 5.0
-  base_move_cost:        [ 1.0,    1.0,     1.0   ],  // 1.0
-  distance_cost:         [ 0.2,    0.2,     0.2   ],  // 0.2
-  preparation_period:    [ 0.35,   0.5,     0.65  ],  // 0.5
-  cooldown:              [ 0.7,    1.0,     1.3   ],  // 0.8
-  movement_speed:        [ 4.5,    2.0,     1.0   ],  // 4.0
-  movement_freedom_deg:  [ 5.0,    5.0,     5.0   ],  // 5.0
-  diameter_piece:        [ 0.6,    0.6,     0.6   ],  // 0.6
+  //                      bullet   rapid    slow 
+  mana_refill_rate:      [ 0.35,   0.15,    0.075 ], 
+  maximum_mana:          [ 5.0,    5.0,     5.0   ], 
+  base_move_cost:        [ 1.0,    1.0,     1.0   ], 
+  distance_cost:         [ 0.2,    0.2,     0.2   ], 
+  preparation_period:    [ 0.35,   0.5,     0.65  ], 
+  cooldown:              [ 0.9,    1.3,     1.7   ], 
+  movement_speed:        [ 4.5,    2.0,     1.0   ], 
+  movement_freedom_deg:  [ 5.0,    5.0,     5.0   ], 
+  diameter_piece:        [ 0.6,    0.6,     0.6   ], 
 };
 
 export const PRESETS: Record<string, Params> = Object.fromEntries(

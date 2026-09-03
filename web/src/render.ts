@@ -1,5 +1,7 @@
 /**
- * Canvas renderer. Colours and layout follow client/renderer.py.
+ * Canvas renderer. Layout follows client/renderer.py; the palette is the
+ * page's - ivory and walnut pieces on the board's own wood, so the canvas and
+ * the surrounding chrome are one material.
  *
  * Board coordinates match the server: (0,0) top-left (black back rank),
  * (8,8) bottom-right (white back rank).
@@ -8,23 +10,23 @@
 import { canCastle, DIAMETER_PIECE, type Piece } from "./geometry.ts";
 import { type GameState, forPiece } from "./protocol.ts";
 
-const C_BG = "#1e1e1e";
+const C_BG = "#241a12";
 const C_LIGHT = "#f0d9b5";
 const C_DARK = "#b58863";
 const C_BOARD_BORDER = "#64503c";
-const C_WHITE_FILL = "#ffffff";
-const C_BLACK_FILL = "#161616";
-const C_WHITE_BORDER = "#c8c8c8";
-const C_BLACK_BORDER = "#2d2d2d";
-const C_WHITE_ICON = "#0c0c0c";
-const C_BLACK_ICON = "#f5f5f5";
+const C_WHITE_FILL = "#f7eddb";
+const C_BLACK_FILL = "#33231a";
+const C_WHITE_BORDER = "#8f6f47";
+const C_BLACK_BORDER = "#16100b";
+const C_WHITE_ICON = "#3a2a19";
+const C_BLACK_ICON = "#efe0c2";
 const C_SELECT = "#50d250";
 const C_DEST_MARKER = "#dcc832";
 const C_GHOST_FILL = "#a0a0c8";
-const C_MANA_BG = "#191937";
+const C_MANA_BG = "#1c130d";
 const C_MANA_WHITE = "#4682c8";
 const C_MANA_BLACK = "#b43c3c";
-const C_TEXT = "#dcdcdc";
+const C_TEXT = "#e9dcbe";
 const C_TIMER_PREP = "#dcb932";
 const C_TIMER_COOL = "#46a0dc";
 const C_WIN_TEXT = "#ffdc64";
@@ -156,7 +158,7 @@ export class Renderer {
       }
     }
     this.drawMana(state, rect.width);
-    this.drawStatus(rtt, rect.width);
+    this.drawStatus(rtt, rect.height);
 
     if (state.countdown !== null && state.countdown !== undefined) {
       this.drawCentered(String(state.countdown || "GO"), rect, C_WIN_TEXT, this.sq * 1.5);
@@ -438,13 +440,15 @@ export class Renderer {
     void width;
   }
 
-  private drawStatus(rtt: number, width: number): void {
+  /** Bottom left: the top corners belong to the Precise button and the
+      resign and exit buttons, which are HTML and would sit on top of it. */
+  private drawStatus(rtt: number, height: number): void {
     const ctx = this.ctx;
     ctx.fillStyle = C_TEXT;
     ctx.font = "13px system-ui, sans-serif";
-    ctx.textAlign = "right";
-    ctx.textBaseline = "top";
-    ctx.fillText(rtt ? `${rtt} ms` : "", width - 10, 8);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "bottom";
+    ctx.fillText(rtt ? `${rtt} ms` : "", 10, height - 8);
   }
 
   private drawCentered(text: string, _rect: DOMRect, color: string, size: number): void {

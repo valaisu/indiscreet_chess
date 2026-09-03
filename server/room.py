@@ -144,13 +144,12 @@ class Room:
         })
 
     def set_ready(self, color: str, ready: bool, civ, params: dict) -> None:
-        """Record a seat's choice. Solo plays both seats, so it fills both."""
-        seats = ("white", "black") if self.solo else (color,)
-        for seat in seats:
-            self.ready[seat] = ready
-            self.civ[seat] = civ
-            if ready:
-                self.params[seat] = params
+        """Record one seat's choice. A solo client owns both seats and readies
+        them one at a time, so each can be a different civilization."""
+        self.ready[color] = ready
+        self.civ[color] = civ
+        if ready:
+            self.params[color] = params
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -186,7 +185,19 @@ class Room:
         color = conn.color
         if color is None or self.clients.get(color) is not conn:
             return
-        self.clients[color] = None
+        # A solo client is seated twice. Clearing only the seat it was dealt
+        # left the other one pointing at the dead socket, so the game kept
+        # running and kept broadcasting to it.
+        for seat, seated in list(self.clients.items()):
+            if seated is conn:
+                self.clients[seat] = None
+
+        if self.solo:
+            if (self.state == RUNNING and self.game is not None
+                    and not self.game.game_over):
+                # Nobody is left to play it out and nobody to tell.
+                self.game.forfeit(color)
+            return
 
         if self.state == RUNNING:
             await self.broadcast({

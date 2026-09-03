@@ -1,6 +1,6 @@
 // Mirrors shared/protocol.py. Keep in sync.
 // Must equal VERSION in shared/protocol.py; deploy.sh refuses to ship a mismatch.
-export const VERSION = 4;
+export const VERSION = 5;
 
 export const QUEUE_MOVE = "QUEUE_MOVE";
 export const GAME_STATE = "GAME_STATE";
@@ -13,6 +13,7 @@ export const QUICK_MATCH = "QUICK_MATCH";
 export const REJOIN = "REJOIN";
 export const SET_READY = "SET_READY";
 export const LEAVE_ROOM = "LEAVE_ROOM";
+export const RESIGN = "RESIGN";
 export const PING = "PING";
 
 export const ROOM_CREATED = "ROOM_CREATED";

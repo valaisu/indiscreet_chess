@@ -12,7 +12,7 @@ class PieceType(Enum):
     BISHOP = "bishop"
     QUEEN = "queen"
     KING = "king"
-    GHOST = "ghost"   # en passant ghost — stationary, capturable by enemy pawns only
+    GHOST = "ghost"   # en passant ghost - stationary, capturable by enemy pawns only
 
 
 class PieceState(Enum):
@@ -151,7 +151,7 @@ def start_overlap_reason(p: dict | None) -> str | None:
     is resolving contacts on tick one. Sizes are per piece type, so the limit
     is not a single number and has to be measured on the real layout.
 
-    Checked per player — the two sides start five squares apart, and no
+    Checked per player - the two sides start five squares apart, and no
     permitted size comes close to closing that.
     """
     p = p or {}
@@ -172,7 +172,7 @@ def start_overlap_reason(p: dict | None) -> str | None:
                 continue
             if math.hypot(a.x - b.x, a.y - b.y) <= a.radius + b.radius + 1e-9:
                 return (f"pieces would start touching: {a.type.value} and "
-                        f"{b.type.value} — reduce piece size")
+                        f"{b.type.value} - reduce piece size")
     return None
 
 

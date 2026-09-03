@@ -1,5 +1,5 @@
 """
-Continuous Chess — client entry point.
+Continuous Chess - client entry point.
 
 Run from project root:
     python -m client.main
@@ -232,7 +232,7 @@ def _snap_destination(bx: float, by: float, piece: dict,
             print(f"[snap]   pawn fwd={fwd:+.0f}  has_moved={piece.get('has_moved')}  max_fwd={max_fwd}")
         try_sector(0.0, fwd, min(max_fwd, board_max(0.0, fwd)))
 
-        # Diagonal capture circles — only enemy pieces activate the valid arc
+        # Diagonal capture circles - only enemy pieces activate the valid arc
         diag_r = _SQRT2 * math.tan(freedom_rad)   # circle radius in board units
         if pieces is not None:
             for xdir in (-1.0, 1.0):
@@ -520,7 +520,7 @@ def _game_loop(screen: pygame.Surface, config: dict) -> None:
                     last_state      = msg
                     last_state_time = time.monotonic()
                 elif msg.get("type") == MOVE_REJECTED:
-                    print(f"[client] Rejected: {msg.get('piece_id')} — {msg.get('reason')}")
+                    print(f"[client] Rejected: {msg.get('piece_id')} - {msg.get('reason')}")
         except queue.Empty:
             pass
 

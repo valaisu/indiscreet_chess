@@ -30,7 +30,7 @@ def _connect(url: str):
 
 def legal_destination(piece: dict) -> tuple[float, float] | None:
     """
-    A destination that server/rules.py should accept. Deliberately naive — it
+    A destination that server/rules.py should accept. Deliberately naive - it
     only needs to generate traffic, not play well. Exact directions are always
     inside the freedom cone.
     """

@@ -2,7 +2,7 @@
  * Civilizations: percentage buffs and debuffs against the base settings.
  *
  * TABLE is the thing to edit. Every number is a percent change from the base
- * civilization ("none"), which is the tempo preset untouched — a column of
+ * civilization ("none"), which is the tempo preset untouched - a column of
  * zeros, and competitive by definition.
  *
  * Balance is checked in points, not percent, because a percent is worth
@@ -17,13 +17,13 @@
  *
  * PIECE_TABLE singles out one piece type. Such an effect is worth only the
  * share of moves that piece accounts for, so its point cost is scaled by
- * WEIGHT — a 20% discount on the king, which rarely moves, costs a fraction of
+ * WEIGHT - a 20% discount on the king, which rarely moves, costs a fraction of
  * the same discount on pawns. Buffing the king or pawns is defensive; buffing
  * anything else is offensive.
  *
  * diameter_piece is the odd one out: it is not obviously good in one
  * direction. A smaller piece is harder to hit and slips through gaps, a larger
- * one blocks a file and reaches an enemy sooner — but it is also a bigger
+ * one blocks a file and reaches an enemy sooner - but it is also a bigger
  * target and is stopped by friends more often. The rate below takes the second
  * effect as dominant (smaller is better), which is the assumption most worth
  * testing once games get played. It is probably too harsh on a short-range
@@ -49,7 +49,7 @@ export const PER_POINT: Record<string, number> = {
 
 /**
  * Share of the moves each piece type accounts for while the game is still
- * undecided — not its chess value. Eight pawns move constantly; the queen is
+ * undecided - not its chess value. Eight pawns move constantly; the queen is
  * powerful but held back; the king barely moves at all. These are estimates
  * and the honest thing to tune once games get played.
  */
@@ -141,7 +141,7 @@ export function points(civ: string): number {
  *
  * Exact zero was false precision. WEIGHT is a guess at how often each piece
  * moves and the rate for piece size is openly a guess at whether size is even
- * good, so every per-piece row costs an approximate number of points — and
+ * good, so every per-piece row costs an approximate number of points - and
  * bending a real number to make an approximate one cancel is arithmetic, not
  * balance. A quarter point is under 3% of a cooldown: smaller than the error
  * in the numbers being checked, and far smaller than anything a player feels.
@@ -171,16 +171,21 @@ export function withCiv(base: Params, civ: string): Params {
   return mods ? applyModifiers(base, mods) : base;
 }
 
-/** One line of flavour per civ, for the picker. */
-export const FLAVOUR: Record<string, string> = {
-  hun:       "Horse archers. Everywhere at once, and gone before the answer comes.",
-  roman:     "The legion. Cheap, ordered, and it never stops walking toward you.",
-  greek:     "The phalanx. Nothing gets through the front, and nothing reaches far.",
-  persian:   "Royal roads. The empire is wide and crossing it costs almost nothing.",
-  egyptian:  "Monuments. Everything takes an age to begin and then cannot be stopped.",
-  norse:     "Raiders. The sail is over the horizon before anyone rings a bell.",
-  swiss:     "The pike square. Out-waits any charge, and owns not one horse.",
-  byzantine: "Walls and patience. Beaten every century, standing every century.",
+/**
+ * A civilization's title: one or two words under its name, the way a leader
+ * carries an epithet. Long enough to say what the side is about, short enough
+ * that eight of them read as a row of choices rather than a page of prose.
+ */
+export const TITLE: Record<string, string> = {
+  none:      "As Written",
+  hun:       "Horse Archers",
+  roman:     "The Legion",
+  greek:     "The Phalanx",
+  persian:   "Royal Roads",
+  egyptian:  "Monuments",
+  norse:     "Raiders",
+  swiss:     "Pike Square",
+  byzantine: "The Walls",
 };
 
 const LABEL: Record<string, string> = {

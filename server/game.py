@@ -231,8 +231,8 @@ class GameState:
                     piece.pending_castling_rook_id = rook.id
 
         # Stamp the kind of pawn move onto the piece. The physics needs to know
-        # whether this is a diagonal capture — immune in flight, resolved as a
-        # burst on arrival — and a pawn can promote before it gets there, so
+        # whether this is a diagonal capture - immune in flight, resolved as a
+        # burst on arrival - and a pawn can promote before it gets there, so
         # this cannot be re-derived from the piece's type later.
         piece.diagonal_capture = (
             piece.type == PieceType.PAWN
@@ -288,7 +288,7 @@ class GameState:
     # ------------------------------------------------------------------
 
     def _check_promotions(self) -> None:
-        """A pawn promotes when its centerpoint reaches the last rank — not
+        """A pawn promotes when its centerpoint reaches the last rank - not
         when the edge of its hitbox touches it, which promoted a large pawn
         most of a square early and made promotion depend on piece size.
 
@@ -444,7 +444,7 @@ class GameState:
 
     def _visible_piece(self, piece: Piece, viewer: str | None) -> dict:
         """One piece as `viewer` is allowed to see it. A piece whose phase is
-        hidden looks idle, and loses its destination with it — the marker is
+        hidden looks idle, and loses its destination with it - the marker is
         the same information by another route."""
         d = piece.to_dict()
         if viewer is None or piece.owner == viewer or piece.type == PieceType.GHOST:

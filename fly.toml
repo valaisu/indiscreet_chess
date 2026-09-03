@@ -1,6 +1,6 @@
 # Rooms live in memory, so this app must never run more than one machine:
 # a second instance would strand the two halves of a game in separate worlds.
-# min_machines_running does not prevent that — Fly adds a second machine for
+# min_machines_running does not prevent that - Fly adds a second machine for
 # high availability unless you deploy with --ha=false:
 #   fly deploy --remote-only --ha=false
 app = "indiscreet-chess-valaisu"
@@ -24,7 +24,7 @@ primary_region = "arn"
   min_machines_running = 1
 
   # Two connections per room, on a 512 MB machine. These caps bound how much
-  # traffic an abusive client can pull before Fly's proxy starts refusing —
+  # traffic an abusive client can pull before Fly's proxy starts refusing -
   # the account spend limit is the real backstop, this shrinks the target.
   [http_service.concurrency]
     type = "connections"

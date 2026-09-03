@@ -5,7 +5,7 @@
  * agreed per room and live in the lobby payloads instead.
  *
  * Stored in localStorage so a phone and a laptop can be set up differently,
- * which is the point — a mouse and a touchscreen do not want the same numbers.
+ * which is the point - a mouse and a touchscreen do not want the same numbers.
  */
 
 export interface Settings {
@@ -13,7 +13,7 @@ export interface Settings {
   moveMode: "both" | "click" | "drag";
   /**
    * How far a drag must travel, in squares, before release counts as a move
-   * rather than a click. Below it the piece is merely selected — which is what
+   * rather than a click. Below it the piece is merely selected - which is what
    * makes a deliberate 0.2-square move impossible without `precise`.
    */
   dragThreshold: number;
@@ -67,5 +67,5 @@ export const VIEW_DEFAULTS: View = {
   enemy_mana: false,
   enemy_prep: true,
   enemy_cooldown: true,
-  enemy_dest: true,
+  enemy_dest: false,
 };
