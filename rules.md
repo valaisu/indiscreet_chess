@@ -85,22 +85,22 @@ A piece is considered **moving** only when its position is actively changing (i.
 ## Capture
 
 ### Standard Capture
-A moving piece captures an enemy piece the instant their hitboxes first touch. **Exception**: a Pawn executing a diagonal capture does not capture on contact during travel; all capture is resolved only upon arrival (see Pawn - Diagonal Capture).
+A moving piece captures an enemy piece the instant their hitboxes first touch. A Pawn executing a diagonal capture is no exception: it captures the first enemy it touches, which need not be the piece it was aimed at.
 
 ### Mutual Capture
-If both pieces are moving at the moment their hitboxes touch, both pieces are removed simultaneously. **Exception**: a Pawn executing a diagonal capture is immune to mutual capture during travel.
+If both pieces are moving at the moment their hitboxes touch, both pieces are removed simultaneously. **Exception**: a Pawn moving forward captures nothing, and that holds from both sides of the contact. A forward-moving Pawn that meets a moving enemy is removed alone: the enemy takes it, spends its one capture on it and continues under Continued Movement After Capture, and the Pawn takes nothing with it. Two forward-moving Pawns meeting head-on remove neither: both stop at the point of contact.
 
 ### Continued Movement After Capture
 If a moving piece captures an enemy piece and is not itself captured, it continues moving in the same direction - stopping at whichever comes first: the point where the captured piece's centerpoint lies on a perpendicular to the direction of movement, or the piece's original destination. It then stops (and enters cooldown).
 
 ### Capture Limit
-Each piece may capture at most one enemy piece per move execution. **Exception**: the Knight (see Knight rules below), which clears everything it lands on. A Pawn executing a diagonal capture resolves its capture on arrival rather than on contact, but still spends only the one.
+Each piece may capture at most one enemy piece per move execution. A ghost counts as that one enemy. **Exception**: the Knight (see Knight rules below), which clears everything it lands on.
 
 ### Friendly Pieces
-Non-Knight pieces cannot capture friendly pieces. A moving piece that would collide with a friendly piece stops at the point of contact (hitboxes touching) instead. This has no exceptions: a Pawn executing a diagonal capture is blocked by its own side like anything else, even though enemies cannot touch it.
+Non-Knight pieces cannot capture friendly pieces. A moving piece that would collide with a friendly piece stops at the point of contact (hitboxes touching) instead.
 
 ### Blocking by Uncapturable Pieces
-A moving piece also stops at the point of contact if it would collide with any piece it cannot capture at that moment - including pieces it has already passed its capture budget for. **Exception**: a Pawn executing a diagonal capture is never blocked during travel.
+A moving piece also stops at the point of contact if it would collide with any piece it cannot capture at that moment - including pieces it has already passed its capture budget for.
 
 ### Capture During Preparation
 If a piece is captured while it is in its preparation period, the queued move is cancelled and the mana cost is not refunded.
@@ -110,7 +110,7 @@ If a piece is captured while it is in its preparation period, the queued move is
 ## Special Piece Rules
 
 ### Pawn - Forward Movement
-The Pawn moves strictly forward (toward the opponent's side). It **cannot** capture pieces by moving forward. If a Pawn moving forward makes contact with any piece (friend or foe), it stops at that point. The Pawn itself can be captured by enemy pieces that move into it.
+The Pawn moves strictly forward (toward the opponent's side). It **cannot** capture pieces by moving forward, and this is a property of the move rather than of the contact: it captures nothing whether it ran into the other piece or the other piece ran into it. If a Pawn moving forward makes contact with a piece it cannot capture - which is every piece - it stops at that point. The Pawn itself can still be captured by an enemy that moves into it, so a forward push into a moving enemy loses the Pawn and takes nothing with it.
 
 ### Pawn - Double Move
 If the Pawn's centerpoint has never left its starting square, it may move forward up to two squares' worth of distance instead of one.
@@ -124,21 +124,33 @@ The player specifies any point inside one of these circles as the destination, s
 
 **Legality:** A destination point D is legal if and only if, at the moment the move is queued, at least one **enemy** piece has its center within `diameter_piece` of D - i.e. the Pawn's hitbox would overlap that piece upon landing. Friendly pieces do not satisfy this condition. Only the portion of the circle satisfying this condition is available; the remainder is illegal. If no enemy piece exists anywhere near the circle, the move cannot be queued at all.
 
-**During travel:** While the Pawn is moving toward its diagonal destination it cannot capture and cannot be captured. It passes through enemy pieces without interaction. Friendly pieces do stop it: on contact with one it halts there, hitboxes touching, and the move ends having captured nothing. With the default piece size only a friend at or beside the landing point is near enough to the path to interfere; larger pieces get in each other's way more.
+**During travel:** The move is an ordinary one, resolved exactly as a Bishop's is. The Pawn captures the first enemy piece its hitbox touches, spending its one capture, and then continues under Continued Movement After Capture. If that enemy was itself moving, both are removed. A friendly piece stops it at the point of contact with nothing captured, and so does any piece it cannot capture at that moment.
 
-**On arrival:** The Pawn captures exactly one enemy piece - the one whose centre is nearest the landing position, among enemies whose hitboxes overlap it. Friendly pieces are never captured. If that piece was itself moving at the moment of arrival, the Pawn is also removed (in addition to capturing it). Pieces immune during their own travel (a Knight in flight, another diagonally capturing Pawn) are not eligible targets and are passed over.
+The enemy that made the move legal is therefore not necessarily the one taken: anything that gets between the Pawn and its destination is touched first and dies instead.
 
-**If targets move away:** If no piece remains within capture range of the landing position when the Pawn arrives, the Pawn completes its move and remains at the destination having captured nothing.
+**If targets move away:** If nothing is touched along the way, the Pawn completes its move and remains at the destination having captured nothing.
 
 ### Pawn - En Passant
-When a Pawn executes a double move, it leaves a **ghost** at the point where its centerpoint crosses the centerline of the 3rd rank (White) or 6th rank (Black). An enemy Pawn may capture this ghost; doing so also removes the original Pawn.
+A double move can be answered by capturing the Pawn at the point it passed through rather than where it ended up.
 
-The ghost disappears when the opponent queues a move for the first time after the double-moving Pawn has finished its movement, and that queued move is not one targeting the ghost. Until this window closes, the double-moved Pawn may continue moving and can still be removed via en passant.
+**The ghost:** The moment a double-moving Pawn's centerpoint has travelled one square from where it started, a **ghost** is created there - at that exact point, so its sideways position is wherever the Pawn's own cone took it, not the centre of a square. The ghost belongs to the moving player, is the same size as a piece, and appears while the Pawn is still travelling.
+
+**What may touch it:** Only an enemy Pawn executing a **diagonal capture**. A forward push cannot take it, and neither can any other piece: a Knight landing on top of a ghost does not remove it, and nothing is ever blocked by one. It is a marker, not a body.
+
+**Capturing it:** The ghost satisfies the diagonal capture's legality condition like any other enemy piece, so it is targeted by aiming an ordinary diagonal capture at it. Taking the ghost removes the Pawn that left it, wherever that Pawn has since got to - including while it is still moving.
+
+**It costs the capture.** A ghost is captured on the same terms as a real piece: it spends the Pawn's one capture, and the Pawn then continues under Continued Movement After Capture. A Pawn that has already captured something earlier in the move therefore cannot take a ghost.
+
+**A spent Pawn passes through.** A ghost is a marker, so a Pawn that cannot capture it is not blocked by it either: it moves through and may come to rest overlapping the marker, which survives, along with the Pawn that left it.
+
+**If the Pawn dies first:** If the double-moving Pawn is captured by other means, its ghost is removed with it.
+
+**How long it lasts:** Moves queued while the double-moving Pawn is still preparing or still travelling do not affect the ghost. The first move the opponent queues after that Pawn has finished expires it - unless that move is a Pawn move aimed at the ghost, which uses the window: the ghost then stops expiring altogether and remains until it is captured or the Pawn that left it dies. So the answer must be the opponent's very next move, but it may be queued while the Pawn is still on its way.
 
 ### Pawn - Promotion
 When a Pawn's **centerpoint** enters the last rank, it promotes to a Queen. Any movement already in progress continues uninterrupted, completing the previously queued move vector.
 
-Promotion changes the piece, never the move it is executing. A move queued as a diagonal capture keeps its immunity in flight and still resolves as an arrival capture even if the Pawn has become a Queen on the way, and the capture budget already spent by that move is not refilled - only the next move refills it.
+Promotion changes the piece, never the move it is executing. A move queued as a forward push still captures nothing, and still cannot capture what runs into it, after the Pawn has become a Queen on the way, and the capture budget already spent by a diagonal capture is not refilled - only the next move refills it.
 
 ### King - Castling
 Castling is available when neither the King nor the relevant Rook has previously moved. It is initiated by queuing a King move of more than 1 and at most 2 squares directly sideways along its rank.
@@ -154,7 +166,9 @@ The Knight moves in a straight line toward its destination. During movement (whi
 - The Knight **cannot** be captured.
 - The Knight **cannot** capture.
 
-On arrival at its destination, the Knight captures **all** pieces - friend or foe - whose hitboxes overlap with it. If any of those pieces were themselves moving at the moment of the Knight's arrival, the Knight is also removed (in addition to capturing them).
+On arrival at its destination, the Knight captures **all** pieces - friend or foe - whose hitboxes overlap with it, however many. Ghosts are not pieces and are not removed (see Pawn - En Passant).
+
+**Landing on a moving piece:** The arrival is still part of the Knight's move, so the Knight counts as moving at that instant and Mutual Capture applies: if any piece it lands on was itself moving, the Knight is removed too. This does not spare anything else. The Knight clears its landing point in full first - every overlapping piece, moving or not, friendly or not - and only then goes down with the moving one. One moving enemy and three stationary ones means all four are captured and the Knight dies alongside them.
 
 The Knight is never blocked mid-movement. It always completes its trajectory and resolves captures only upon arrival.
 

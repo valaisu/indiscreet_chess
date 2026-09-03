@@ -506,16 +506,20 @@
 
           <h3>Capture, in general</h3>
           <p>
-            The general rule holds for the rook, the bishop, the queen and the
-            king. Both pawn moves and the knight are exceptions, and the
-            exceptions matter, so they have their own sections below.
+            The general rule holds for every piece except the knight, and for
+            the pawn only when it moves diagonally. The forward pawn and the
+            knight are the exceptions, and the exceptions matter, so they have
+            their own sections below.
           </p>
           <ul>
             <li>A moving piece captures an enemy the instant their hitboxes
                 touch, then carries on in the same direction and stops level
                 with where that piece stood, or at its destination if that
                 comes first.</li>
-            <li>If both pieces were moving when they touched, both are removed.</li>
+            <li>If both pieces were moving when they touched, both are
+                removed. A pawn pushing forward is the exception: it captures
+                nothing, so it dies alone, and two forward pawns meeting
+                head-on just stop against each other.</li>
             <li><strong>One enemy per move.</strong> After that the piece is
                 spent: the next thing it touches blocks it instead, and it stops
                 there.</li>
@@ -529,28 +533,47 @@
           <h3>Pawns</h3>
           <p>
             <strong>A pawn moving forward cannot capture at all.</strong> It
-            stops the moment it touches any piece, enemy or friendly. It can
-            still be captured by an enemy that moves into it. From its starting
-            square it may go two squares instead of one.
+            stops the moment it touches any piece, enemy or friendly, and it
+            takes nothing with it either way: run one into a moving enemy and
+            you lose the pawn on its own. It can still be captured by an enemy
+            that moves into it. From its starting square it may go two squares
+            instead of one.
           </p>
           <p>
             A pawn captures only by moving diagonally forward, and that move is
             legal only if an enemy is already sitting on the landing point when
-            you queue it. In flight the pawn cannot be touched and touches
-            nothing, passing straight through enemies; its own side still stops
-            it. On arrival it takes the <em>one</em> enemy nearest the landing
-            point, and if that piece was itself moving, the pawn goes with it.
+            you queue it. The move itself is an ordinary one: the pawn takes the
+            first enemy it touches on the way, exactly as a bishop would, so a
+            piece that steps into the path is what dies and the piece you aimed
+            at survives.
           </p>
           <p>
-            A pawn that has just made a double move can be taken in passing.
-            It leaves a marker where it crossed, and an enemy pawn capturing
-            that marker removes the pawn itself. The marker lasts until the
-            opponent's next move.
+            <strong>En passant.</strong> A pawn making a double move drops a
+            marker at the point it passed one square from where it started, and
+            it drops it while still travelling. The marker counts as an enemy
+            piece for the diagonal capture, so you take it with an ordinary
+            diagonal capture aimed at it, and taking it removes the pawn that
+            left it, wherever that pawn has got to by then.
+          </p>
+          <p>
+            Only an enemy pawn moving diagonally can touch a marker. Nothing
+            else sees it: it blocks no one, and a knight landing on it does not
+            remove it. Taking one spends the pawn's one capture like any other,
+            so a pawn that has already taken a piece this move cannot take a
+            marker - it passes straight through and may come to rest on top of
+            one, leaving it and its pawn alive.
+          </p>
+          <p>
+            You must answer with your very next queued move, though you may
+            queue it while the double move is still running. Any other move
+            queued once that pawn has finished lets the marker go.
           </p>
           <p>
             A pawn promotes to a queen when its <em>centre</em> reaches the last
             rank. The move it is executing carries on unchanged: same
-            direction, same immunity, same one capture already spent.
+            direction, and it keeps the terms it started under. A forward push
+            still captures nothing after becoming a queen, and a capture already
+            spent is not handed back.
           </p>
 
           <h3>Knights</h3>
@@ -564,8 +587,14 @@
             <li>On arrival it removes <strong>every</strong> piece its hitbox
                 overlaps, however many, <strong>friendly ones included</strong>.
                 Landing on your own king loses you the game.</li>
-            <li>If any piece it removes was moving at that moment, the knight is
-                removed too.</li>
+            <li>If any piece it removes was moving at that moment, the knight
+                is removed too. The landing counts as part of its jump, so this
+                is the ordinary both-were-moving rule. It costs the knight
+                nothing else: it clears its landing point in full first and only
+                then goes down with the moving piece, so a knight can take four
+                pieces and still die.</li>
+            <li>Markers left by double-moving pawns are not pieces, and a
+                knight landing on one does not remove it.</li>
           </ul>
 
           <h3>Castling</h3>

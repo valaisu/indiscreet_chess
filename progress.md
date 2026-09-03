@@ -316,3 +316,50 @@ spending.
       editing a field by hand calls it with the preset write suppressed.
 - [x] "Applies to a room you open" moved onto a question mark beside the
       heading, the same hover used for solo practice.
+
+## Part 19 - The diagonal pawn captures on contact [done]
+
+- [x] A pawn's diagonal capture is an ordinary move: it runs in `_ccd_loop`
+      with everything else and takes the first enemy its hitbox touches, so a
+      piece that steps into the path is what dies and the piece it was aimed at
+      survives. It could previously be walked straight through.
+- [x] With the immunity gone, `physics` lost `_advance_diagonal_pawns`,
+      `_diagonal_pawn_burst`, `_friendly_block` and `_is_diagonal_pawn`.
+      Friendly blocking, mutual capture and continuing after a capture are all
+      the paths the bishop already used; the knight's burst no longer passes
+      the pawn over.
+- [x] The move is still legal only when an enemy sits on the landing point at
+      queue time. Nothing about which destinations can be chosen changed.
+- [x] The stamp on `Piece` is inverted: `diagonal_capture` became
+      `forward_pawn_move`, because the one rule that still cannot be derived
+      from the piece's type is "this move captures nothing". A forward pawn
+      that promotes in mid-flight now keeps that, where the velocity-derived
+      test in `physics._is_forward_pawn` had dropped it on becoming a queen.
+- [x] "A forward pawn captures nothing" now holds from both sides of the
+      contact. `_resolve_collision` asked it of `a` and never of `b`, so a
+      forward push into a moving enemy traded both, and the piece that ran into
+      a forward pawn was taken by it. A forward pawn now dies alone, and two of
+      them meeting head-on stop against each other and trade nothing.
+
+## Part 20 - Rules text for en passant and the knight [done]
+
+- [x] The En Passant section says how the capture is actually made: the ghost
+      counts as an enemy for the diagonal capture's legality, so it is taken by
+      aiming an ordinary diagonal capture at it. It said only that the ghost
+      existed.
+- [x] A ghost is captured on the same terms as a real piece: it spends the
+      pawn's one capture and stops it under Continued Movement After Capture.
+      `_resolve_collision` used to return early for a ghost, which made en
+      passant free and let one move take the ghost and then a real piece.
+- [x] A pawn with no capture left is not blocked by a ghost either. The
+      `_sweep_time` guard grew `a.capture_remaining <= 0`, so a spent pawn
+      generates no collision event with a marker and comes to rest overlapping
+      it; without that, refusing the capture would have stopped it dead on a
+      thing that is not a body.
+- [x] Only an enemy pawn's diagonal capture interacts with a ghost. Nothing is
+      blocked by one and a Knight landing on one does not remove it.
+- [x] The Knight's arrival is stated as part of its move: it counts as moving
+      when it lands, so Mutual Capture applies, and it still clears its landing
+      point in full before going down with whatever was moving.
+- [x] The Rules tab's promotion paragraph still promised "same immunity", which
+      Part 19 removed.

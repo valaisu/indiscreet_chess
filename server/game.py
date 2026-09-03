@@ -236,13 +236,13 @@ class GameState:
                     piece.pending_castling_rook_id = rook.id
 
         # Stamp the kind of pawn move onto the piece. The physics needs to know
-        # whether this is a diagonal capture - immune in flight, resolved as a
-        # burst on arrival - and a pawn can promote before it gets there, so
-        # this cannot be re-derived from the piece's type later.
-        piece.diagonal_capture = (
+        # whether this is a forward push, which captures nothing on contact, and
+        # a pawn can promote before it arrives, so this cannot be re-derived
+        # from the piece's type later.
+        piece.forward_pawn_move = (
             piece.type == PieceType.PAWN
-            and not is_forward_pawn_move(piece, move["dest_x"], move["dest_y"],
-                                         pp["movement_freedom_deg"])
+            and is_forward_pawn_move(piece, move["dest_x"], move["dest_y"],
+                                     pp["movement_freedom_deg"])
         )
 
         # Detect pawn double move.

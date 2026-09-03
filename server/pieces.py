@@ -41,9 +41,9 @@ class Piece:
     castling_partner_id: str = ""    # ID of king/rook partner during castling transit
     pending_castling_rook_id: str = ""  # set on king during PREPARATION for a castling move
     # Set when a move is queued, not derived from the piece's type: a pawn can
-    # promote in mid-flight, and a queen must not lose the immunity and the
-    # arrival burst that the move it is still executing was queued under.
-    diagonal_capture: bool = False   # this move is a pawn's diagonal capture
+    # promote in mid-flight, and the move it is still executing must keep the
+    # terms it was queued under.
+    forward_pawn_move: bool = False  # this move is a pawn's forward push: captures nothing
     # En passant ghost creation
     is_double_move: bool = False     # this move is a pawn double-step
     ghost_created: bool = False      # ghost has already been spawned for this move

@@ -9,7 +9,8 @@ Algorithm
 Knights are immune during movement and advance independently; burst capture
 fires on arrival.
 
-For all other movers we run an event-driven CCD loop:
+For all other movers - a pawn's diagonal capture included - we run an
+event-driven CCD loop:
 
   while remaining_dt > 0:
     find earliest of:
@@ -34,7 +35,6 @@ _EPS = 1e-9
 def advance_and_resolve(pieces: list[Piece], dt: float) -> None:
     """Main physics entry point. Mutates the pieces list in-place."""
     _advance_knights(pieces, dt)
-    _advance_diagonal_pawns(pieces, dt)
     _ccd_loop(pieces, dt)
 
 
@@ -55,110 +55,12 @@ def _advance_knights(pieces: list[Piece], dt: float) -> None:
     pieces[:] = [p for p in pieces if id(p) not in to_remove]
 
 
-def _diagonal_pawn_burst(pawn: Piece, pieces: list[Piece], to_remove: set) -> None:
-    """
-    On arrival capture ONE enemy - the nearest overlapping the landing point -
-    and remove the pawn as well if that enemy was moving.
-
-    Unlike the knight, a pawn does not clear the square it lands on: it spends
-    the same single capture every other piece gets, so landing between two
-    enemies is a choice of one. Friendly pieces are not targets at all; one in
-    the way stops the pawn before it ever gets here (_friendly_block).
-    """
-    if pawn.capture_remaining <= 0:
-        return
-
-    target: Piece | None = None
-    best = float("inf")
-    for other in pieces:
-        if other is pawn or id(other) in to_remove or other.owner == pawn.owner:
-            continue
-        # Pieces immune during their own travel are skipped
-        if other.state == PieceState.MOVING:
-            if other.type == PieceType.KNIGHT or _is_diagonal_pawn(other):
-                continue
-        dist = math.hypot(other.x - pawn.x, other.y - pawn.y)
-        if dist <= pawn.radius + other.radius and dist < best:
-            best = dist
-            target = other
-
-    if target is None:
-        return
-    to_remove.add(id(target))
-    pawn.capture_remaining -= 1
-    if target.state == PieceState.MOVING:
-        to_remove.add(id(pawn))
-
-
-def _friendly_block(pawn: Piece, pieces: list[Piece],
-                    max_t: float) -> tuple[float, Piece] | None:
-    """Earliest contact with a friendly piece within max_t, and what it hit.
-
-    A diagonal capture passes through enemies untouched, but its own side
-    stops it exactly as it stops every other move. With default sizes only a
-    friend at the landing point is close enough to the path to matter; make
-    the pieces large enough and one standing beside the pawn will get in the
-    way, which is the point of large pieces.
-    """
-    best: tuple[float, Piece] | None = None
-    for other in pieces:
-        if other is pawn or other.owner != pawn.owner:
-            continue
-        if other.type == PieceType.GHOST:
-            continue  # a marker, not a body
-        # Pieces that are themselves untouchable in flight cannot be hit.
-        if other.state == PieceState.MOVING:
-            if other.type == PieceType.KNIGHT or _is_diagonal_pawn(other):
-                continue
-        t = _sweep_time(pawn, other, max_t)
-        if t is not None and (best is None or t < best[0]):
-            best = (t, other)
-    return best
-
-
-def _stop_at_contact(mover: Piece, blocker: Piece) -> None:
-    """Halt mover on the exact contact surface, so the stored distance is R
-    rather than R +/- float drift."""
-    dx = mover.x - blocker.x
-    dy = mover.y - blocker.y
-    dist = math.hypot(dx, dy)
-    R = mover.radius + blocker.radius
-    if dist > 1e-9:
-        mover.stop_at(blocker.x + dx / dist * R, blocker.y + dy / dist * R)
-    else:
-        mover.stop_at(mover.x, mover.y)
-
-
-def _advance_diagonal_pawns(pieces: list[Piece], dt: float) -> None:
-    to_remove: set[int] = set()
-
-    for pawn in list(pieces):
-        if not _is_diagonal_pawn(pawn):
-            continue
-        hit = _friendly_block(pawn, pieces, min(dt, pawn.state_timer))
-        if hit is not None:
-            # Blocked by its own side: it stops where it touches and captures
-            # nothing. Deliberately not the burst path - arriving and stopping
-            # short are different endings to the move.
-            t, blocker = hit
-            pawn._advance_movement(t)
-            _stop_at_contact(pawn, blocker)
-            continue
-        pawn.advance(dt)
-        if pawn.state == PieceState.COOLDOWN and id(pawn) not in to_remove:
-            _diagonal_pawn_burst(pawn, pieces, to_remove)
-
-    pieces[:] = [p for p in pieces if id(p) not in to_remove]
-
-
 def _knight_burst(knight: Piece, pieces: list[Piece], to_remove: set) -> None:
     """Remove all pieces overlapping the knight on arrival; remove knight if any were moving."""
     for other in pieces:
         if other is knight or id(other) in to_remove:
             continue
         if other.type == PieceType.GHOST:
-            continue
-        if _is_diagonal_pawn(other):  # immune during diagonal travel
             continue
         dist = math.hypot(other.x - knight.x, other.y - knight.y)
         if dist <= knight.radius + other.radius:
@@ -179,8 +81,7 @@ def _ccd_loop(pieces: list[Piece], dt: float) -> None:
         movers = [p for p in pieces
                   if p.state == PieceState.MOVING
                   and id(p) not in removed
-                  and p.type != PieceType.KNIGHT
-                  and not _is_diagonal_pawn(p)]
+                  and p.type != PieceType.KNIGHT]
 
         if not movers:
             break
@@ -195,9 +96,6 @@ def _ccd_loop(pieces: list[Piece], dt: float) -> None:
                     continue
                 # Knights in MOVING state are immune to collision
                 if b.type == PieceType.KNIGHT and b.state == PieceState.MOVING:
-                    continue
-                # Diagonal-capturing pawns are immune during travel
-                if _is_diagonal_pawn(b):
                     continue
                 # Castling partners are allowed to overlap during transit
                 if a.castling_partner_id and b.id == a.castling_partner_id:
@@ -245,28 +143,17 @@ def _ccd_loop(pieces: list[Piece], dt: float) -> None:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _is_forward_pawn(piece: Piece) -> bool:
-    """True when this pawn is moving in its forward (non-capturing) direction."""
-    if piece.type != PieceType.PAWN:
-        return False
-    speed = math.hypot(piece.vel_x, piece.vel_y)
-    if speed < 1e-9:
-        return False
-    forward_dy = -1.0 if piece.owner == "white" else 1.0
-    dot = (piece.vel_y * forward_dy) / speed
-    freedom = math.radians(piece.freedom_deg)
-    return math.acos(max(-1.0, min(1.0, dot))) <= freedom
-
-
-def _is_diagonal_pawn(piece: Piece) -> bool:
-    """True while a diagonal capture is in flight (immune, and never blocked).
-
-    Reads the flag stamped on the move, not the piece's current type. A pawn
-    that promotes in mid-flight is a queen by the time it lands, and deriving
-    this from the type would drop it out of the immune set halfway across -
-    it would suddenly become collidable and would never fire its burst.
-    """
-    return piece.state == PieceState.MOVING and piece.diagonal_capture
+def _stop_at_contact(mover: Piece, blocker: Piece) -> None:
+    """Halt mover on the exact contact surface, so the stored distance is R
+    rather than R +/- float drift."""
+    dx = mover.x - blocker.x
+    dy = mover.y - blocker.y
+    dist = math.hypot(dx, dy)
+    R = mover.radius + blocker.radius
+    if dist > 1e-9:
+        mover.stop_at(blocker.x + dx / dist * R, blocker.y + dy / dist * R)
+    else:
+        mover.stop_at(mover.x, mover.y)
 
 
 def _continue_after_capture(piece: Piece, cx: float, cy: float) -> None:
@@ -298,9 +185,12 @@ def _sweep_time(a: Piece, b: Piece, max_t: float) -> float | None:
     vy = a.vel_y - (b.vel_y if b.state == PieceState.MOVING else 0.0)
     R = a.radius + b.radius
 
-    # Ghosts can only be captured by enemy pawns moving diagonally.
+    # Ghosts can only be captured by enemy pawns moving diagonally that still
+    # have their capture. A pawn that has spent it passes through: the ghost is
+    # a marker, so it must not block the pawn the way a real piece would.
     if b.type == PieceType.GHOST:
-        if a.type != PieceType.PAWN or a.owner == b.owner or _is_forward_pawn(a):
+        if (a.type != PieceType.PAWN or a.owner == b.owner
+                or a.forward_pawn_move or a.capture_remaining <= 0):
             return None
 
     # If already touching or overlapping, only collide if approaching.
@@ -345,25 +235,23 @@ def _resolve_collision(a: Piece, b: Piece, removed: set) -> None:
     b_moving = b.state == PieceState.MOVING
     b_immune = b.type == PieceType.KNIGHT and b_moving
 
-    # Forward-moving pawns cannot capture anything.
+    # Forward-moving pawns cannot capture anything, from either side of the
+    # contact: a piece that runs into one is not taken by it, and two forward
+    # pawns meeting head-on both stop instead of trading.
     a_captures_b = (
         b.owner != a.owner
         and a.capture_remaining > 0
         and not b_immune
-        and not _is_forward_pawn(a)
+        and not a.forward_pawn_move
     )
     b_captures_a = (
         b_moving
         and b.owner != a.owner
         and b.capture_remaining > 0
+        and not b.forward_pawn_move
     )
 
     if a_captures_b:
-        # Ghost capture: remove ghost, pawn continues to its original destination.
-        if b.type == PieceType.GHOST:
-            removed.add(id(b))
-            return
-
         removed.add(id(b))
         a.capture_remaining -= 1
 
