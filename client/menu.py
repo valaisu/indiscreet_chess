@@ -75,7 +75,7 @@ DISPLAY_DEFAULTS: dict = {
     "drag_pieces":     False,
 }
 
-# Session-persistent copy — modified in-place by the settings screen.
+# Session-persistent copy - modified in-place by the settings screen.
 _persistent_display: dict = dict(DISPLAY_DEFAULTS)
 
 

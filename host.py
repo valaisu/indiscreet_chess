@@ -1,4 +1,4 @@
-"""Convenience launcher — equivalent to running python -m client.main."""
+"""Convenience launcher - equivalent to running python -m client.main."""
 import subprocess
 import sys
 

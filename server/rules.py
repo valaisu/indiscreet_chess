@@ -171,7 +171,7 @@ def _piece_at_dest(dest_x: float, dest_y: float, pawn: Piece,
 def seg_dist(px: float, py: float,
               ax: float, ay: float,
               bx: float, by: float) -> float:
-    """Shortest distance from point (px, py) to segment (ax, ay)–(bx, by)."""
+    """Shortest distance from point (px, py) to segment (ax, ay)-(bx, by)."""
     ddx, ddy = bx - ax, by - ay
     seg_sq = ddx * ddx + ddy * ddy
     if seg_sq < 1e-12:

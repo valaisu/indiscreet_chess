@@ -7,7 +7,7 @@
  * piece apply to that piece only. The "pt" column is the % that buys one point
  * of goodness, so its sign tells you which direction helps: cooldown is -10,
  * meaning a negative cell is a buff. The last row is what each civ spends. It
- * should be near zero — piece-specific rows are estimates, so BUDGET_TOLERANCE
+ * should be near zero - piece-specific rows are estimates, so BUDGET_TOLERANCE
  * of drift is allowed and printed rather than corrected. Exits non-zero only
  * if a civ is outside it.
  */

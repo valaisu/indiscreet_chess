@@ -57,8 +57,15 @@ export class Net {
           this.code = msg.code;
           this.color = msg.color;
           this.token = msg.token;
-          // Survive a reload: the seat can be reclaimed within the grace window.
-          sessionStorage.setItem("seat", JSON.stringify({ code: msg.code, token: msg.token }));
+          // Survive a reload: the seat can be reclaimed within the grace
+          // window. Solo rides along, because after a reload the client has to
+          // know it still owns both seats or it can only move white. Only
+          // ROOM_CREATED carries the flag, so a rejoin to the same room keeps
+          // what was stored.
+          const prior = JSON.parse(sessionStorage.getItem("seat") ?? "null");
+          const solo = msg.solo ?? (prior?.code === msg.code ? !!prior.solo : false);
+          sessionStorage.setItem("seat", JSON.stringify(
+            { code: msg.code, token: msg.token, solo }));
         }
         this.emit(msg.type, msg);
       };

@@ -1,5 +1,5 @@
 /**
- * Input snapping — a port of _snap_destination from the pygame client.
+ * Input snapping - a port of _snap_destination from the pygame client.
  *
  * This module predicts what server/rules.py:validate_move will accept. When the
  * two disagree the player clicks and nothing happens, so the small pullback
@@ -89,7 +89,7 @@ export function snapDestination(
 
     if (Math.abs(delta) <= freedomRad) {
       // Inside the sector: keep the click direction, clamp the distance.
-      // 0.9999 absorbs server-side position skew — physics can nudge an idle
+      // 0.9999 absorbs server-side position skew - physics can nudge an idle
       // piece between the snapshot we drew and the moment it validates.
       const actualMax = Math.min(maxT, boardMax(nx, ny)) * 0.9999;
       const r = Math.min(clickR, actualMax);

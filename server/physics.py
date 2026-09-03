@@ -57,7 +57,7 @@ def _advance_knights(pieces: list[Piece], dt: float) -> None:
 
 def _diagonal_pawn_burst(pawn: Piece, pieces: list[Piece], to_remove: set) -> None:
     """
-    On arrival capture ONE enemy — the nearest overlapping the landing point —
+    On arrival capture ONE enemy - the nearest overlapping the landing point -
     and remove the pawn as well if that enemy was moving.
 
     Unlike the knight, a pawn does not clear the square it lands on: it spends
@@ -138,7 +138,7 @@ def _advance_diagonal_pawns(pieces: list[Piece], dt: float) -> None:
         hit = _friendly_block(pawn, pieces, min(dt, pawn.state_timer))
         if hit is not None:
             # Blocked by its own side: it stops where it touches and captures
-            # nothing. Deliberately not the burst path — arriving and stopping
+            # nothing. Deliberately not the burst path - arriving and stopping
             # short are different endings to the move.
             t, blocker = hit
             pawn._advance_movement(t)
@@ -263,7 +263,7 @@ def _is_diagonal_pawn(piece: Piece) -> bool:
 
     Reads the flag stamped on the move, not the piece's current type. A pawn
     that promotes in mid-flight is a queen by the time it lands, and deriving
-    this from the type would drop it out of the immune set halfway across —
+    this from the type would drop it out of the immune set halfway across -
     it would suddenly become collidable and would never fire its burst.
     """
     return piece.state == PieceState.MOVING and piece.diagonal_capture
@@ -307,7 +307,7 @@ def _sweep_time(a: Piece, b: Piece, max_t: float) -> float | None:
     # Separating pieces are let go freely (e.g. after a capture continuation or castling).
     if px * px + py * py <= R * R:
         if vx * px + vy * py >= 0.0:
-            return None   # separating or parallel — let them move apart
+            return None   # separating or parallel - let them move apart
         return _EPS       # approaching while in contact → immediate collision
 
     # Quadratic: (v·v)t² + 2(p·v)t + (p·p − R²) = 0

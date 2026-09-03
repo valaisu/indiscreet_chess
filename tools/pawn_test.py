@@ -5,8 +5,8 @@ centerpoint, and no interaction between the two.
     PYTHONPATH=. python3 tools/pawn_test.py
 
 The dangerous case is a diagonal capture that lands on the last rank. The pawn
-promotes in mid-flight, and every rule about the move it is executing —
-immunity, the arrival burst, the spent capture — has to survive it turning into
+promotes in mid-flight, and every rule about the move it is executing -
+immunity, the arrival burst, the spent capture - has to survive it turning into
 a queen. Deriving any of that from the piece's type is how it breaks.
 """
 
@@ -131,7 +131,7 @@ def test_promotes_on_centerpoint() -> None:
 # --- promotion during a diagonal capture ------------------------------------
 
 def test_promotion_mid_capture() -> None:
-    """Landing on the last rank promotes and captures — once."""
+    """Landing on the last rank promotes and captures - once."""
     p = pawn("p", "white", 4.5, 1.5)
     victim = other("victim", PieceType.ROOK, "black", 3.5, 0.5)
     behind = other("behind", PieceType.ROOK, "black", 3.3, 0.5)

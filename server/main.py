@@ -127,7 +127,15 @@ class Hub:
         if civ is not None and (not isinstance(civ, str) or len(civ) > 20):
             await conn.error("bad civ")
             return
-        room.set_ready(conn.color, bool(msg.get("ready")), civ, p or {})
+        # One client holds both seats in solo, so it says which one it is
+        # readying. Anywhere else the seat is the one the server assigned, and
+        # a solo client that names no seat readies both with the same choice.
+        seats = [conn.color]
+        if room.solo:
+            named = msg.get("color")
+            seats = [named] if named in ("white", "black") else ["white", "black"]
+        for seat in seats:
+            room.set_ready(seat, bool(msg.get("ready")), civ, p or {})
         await room.notify_state()
         room.start_if_ready()
 
@@ -147,6 +155,21 @@ class Hub:
                                          conn.color or "white")
         if rejection:
             await conn.send(rejection)
+
+    async def on_resign(self, conn: Connection, msg: dict) -> None:
+        """Give up the game in progress. The seat stays connected, so the
+        result arrives as a normal GAME_OVER rather than a disconnect."""
+        room = conn.room
+        if room is None or room.state != RUNNING or room.game is None:
+            return
+        if room.game.game_over:
+            return
+        # In solo both seats are this client, so it says which one gives up.
+        color = conn.color or "white"
+        if room.solo and msg.get("color") in ("white", "black"):
+            color = msg["color"]
+        log.info("room %s: %s resigns", room.code, color)
+        room.game.forfeit(color)
 
     async def on_leave(self, conn: Connection, msg: dict) -> None:
         if conn.room is not None:
@@ -169,6 +192,8 @@ class Hub:
             await self.on_set_ready(conn, msg)
         elif kind == protocol.REJOIN:
             await self.on_rejoin(conn, msg)
+        elif kind == protocol.RESIGN:
+            await self.on_resign(conn, msg)
         elif kind == protocol.LEAVE_ROOM:
             await self.on_leave(conn, msg)
         elif kind == protocol.PING:
@@ -200,7 +225,7 @@ class Hub:
                 if window_count > MAX_MSG_PER_SEC:
                     log.warning("flood from %s, closing", ip)
                     # close() waits for the peer's half of the handshake, which
-                    # a flooding client never sends — that would pin this task
+                    # a flooding client never sends - that would pin this task
                     # and its connection slot for the full close timeout. Send
                     # the frame and drop the connection now instead.
                     asyncio.create_task(ws.close(1008, "message rate exceeded"))

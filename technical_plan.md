@@ -1,4 +1,4 @@
-# Technical Plan — Continuous Chess
+# Technical Plan - Continuous Chess
 
 ## 1. Architecture
 
@@ -66,7 +66,7 @@ All messages are JSON over WebSocket.
 |---|---|---|
 | `HELLO` | `player_id` | Client identifies itself on connect |
 | `QUEUE_MOVE` | `piece_id`, `destination: [x, y]` | Player queues a move |
-| `READY` | — | Player signals ready to start |
+| `READY` | - | Player signals ready to start |
 
 ### Server → Client
 
@@ -113,7 +113,7 @@ loop at tick_rate Hz:
   9. broadcast GAME_STATE to both clients
 ```
 
-Steps 5–6 may iterate: after resolving the earliest collision, re-sweep remaining movers.
+Steps 5-6 may iterate: after resolving the earliest collision, re-sweep remaining movers.
 
 ### 5.2 Piece State Machine (`pieces.py`)
 
@@ -141,7 +141,7 @@ On receiving `QUEUE_MOVE`:
 5. Distance within cap for Type 2 pieces (King, Pawn)
 6. Knight destination is within one of the 8 landing circles
 7. Pawn-specific: diagonal only if enemy in range; forward blocked by no-capture rule
-8. Castling: neither piece has moved, destination is 1–2 squares sideways
+8. Castling: neither piece has moved, destination is 1-2 squares sideways
 
 ### 5.4 Continuous Collision Detection (`physics.py`)
 
@@ -194,7 +194,7 @@ Knight: immune to capture and cannot capture during movement; captures all overl
 - Ghost capture: treated as a normal piece for collision purposes; removing it also removes the original pawn
 
 **Castling:**
-- Triggered by king move of 1–2 squares sideways with unmoved rook on that side
+- Triggered by king move of 1-2 squares sideways with unmoved rook on that side
 - Both pieces enter MOVING simultaneously when king's PREPARATION expires
 - Rook velocity calculated so it arrives one square from king's dest at the same time
 - Overlap exception: king and castling rook do not block each other during movement
@@ -267,20 +267,20 @@ COOLDOWN               = 0.8    # seconds
 
 ## 8. Development Phases
 
-### Phase 1 — Server core
+### Phase 1 - Server core
 1. `params.py`, `pieces.py` (dataclasses + state machine)
 2. Tick loop with mana regen and state machine advancement
 3. Move validator (all piece types)
 4. WebSocket server, HELLO/READY handshake, GAME_STATE broadcast
 - **Verify:** two clients connect, pieces advance through states, mana depletes and refills
 
-### Phase 2 — Physics
+### Phase 2 - Physics
 5. CCD engine (parametric sweep, resolution loop)
 6. Standard capture and blocking
 7. Continued movement after capture
 - **Verify:** pieces collide correctly in isolation, mutual capture works, blocking works
 
-### Phase 3 — Special rules
+### Phase 3 - Special rules
 8. Pawn (forward no-capture, diagonal conditional, double move)
 9. En passant ghost
 10. Knight jump (immunity + arrival burst)
@@ -288,7 +288,7 @@ COOLDOWN               = 0.8    # seconds
 12. Pawn promotion
 - **Verify:** each rule in isolation with scripted test scenarios
 
-### Phase 4 — Client
+### Phase 4 - Client
 13. Board and piece renderer
 14. Move input (click-to-move)
 15. WebSocket integration
@@ -296,7 +296,7 @@ COOLDOWN               = 0.8    # seconds
 17. UI (mana bar, move markers, cooldown display)
 - **Verify:** full game playable end-to-end on localhost
 
-### Phase 5 — Integration & tuning
+### Phase 5 - Integration & tuning
 18. `host.py` launcher
 19. Parameter tuning for feel
 20. Win/draw screen

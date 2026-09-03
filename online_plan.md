@@ -5,7 +5,7 @@ port forwarding, no accounts.
 
 Architecture decision: **browser client (TypeScript + canvas), Python server
 kept as-is.** The rationale for not rewriting the server in JS is recorded in
-Appendix B — read it before reversing the decision.
+Appendix B - read it before reversing the decision.
 
 ---
 
@@ -16,7 +16,7 @@ Appendix B — read it before reversing the decision.
 already server-authoritative and location-agnostic. This is the expensive,
 hard-won part of the project and it does not get retyped.
 
-**Rewritten**: `server/main.py` — a single-game process becomes a room-hosting
+**Rewritten**: `server/main.py` - a single-game process becomes a room-hosting
 service.
 
 **Replaced**: the entire pygame client (~1800 lines across `client/main.py`,
@@ -51,10 +51,10 @@ are the same language.*
 
 Two deploy targets. The client is static files behind a CDN; the server is one
 process, one asyncio loop, N rooms. Each room owns a `GameState` and a task
-running `GameState.run(room.broadcast)` — that callback signature already
+running `GameState.run(room.broadcast)` - that callback signature already
 exists (`server/game.py:106`), so the game loop needs no change.
 
-**Capacity.** A tick is O(pieces²) on ≤32 pieces at 20 Hz — microseconds. The
+**Capacity.** A tick is O(pieces²) on ≤32 pieces at 20 Hz - microseconds. The
 binding constraint is egress: ~1 Mbps per client (§7). Budget by bandwidth,
 not compute; the smallest instance any host sells is oversized.
 
@@ -76,7 +76,7 @@ All existing in-game messages (`QUEUE_MOVE`, `GAME_STATE`, `MOVE_REJECTED`,
 | S→C | `ROOM_STATE` | `players`, `waiting` |
 | C→S | `REJOIN` | `code`, `token` |
 | S→C | `OPPONENT_LEFT` | `grace_seconds` |
-| S→C | `OPPONENT_REJOINED` | — |
+| S→C | `OPPONENT_REJOINED` | - |
 | C→S | `PING` | `t` |
 | S→C | `PONG` | `t`, `server_time` |
 
@@ -92,7 +92,7 @@ combinations, collision-checked. A room code in the URL fragment
 
 ## 4. Phases
 
-### Phase 1 — Room layer (server only)
+### Phase 1 - Room layer (server only)
 
 New `server/room.py`:
 
@@ -116,7 +116,7 @@ class RoomManager:
 (`server/main.py:85-96`) moves onto `Room` mostly as-is. The game starts when
 both seats fill, replacing the `_ready` event.
 
-One addition to `server/game.py` — the only change to that file:
+One addition to `server/game.py` - the only change to that file:
 
 ```python
 def forfeit(self, color: str) -> None:
@@ -130,7 +130,7 @@ The `while not self.game_over` loop picks this up next tick and exits cleanly.
 while the game keeps broadcasting into a dead socket forever. New behaviour:
 clear the seat, broadcast `OPPONENT_LEFT`, start a 30s grace timer, forfeit on
 expiry. A valid `REJOIN` token cancels the timer. This matters far more with a
-browser client — closing a tab is one keystroke, and mobile browsers suspend
+browser client - closing a tab is one keystroke, and mobile browsers suspend
 sockets on backgrounding.
 
 **Room GC**, sweeping every 30s: `FINISHED` older than 60s, `LOBBY` older than
@@ -147,7 +147,7 @@ generator.
 
 **Size: ~250 new lines, ~120 rewritten.**
 
-### Phase 2 — Hardening
+### Phase 2 - Hardening
 
 Params now arrive over the wire from a public web page, so they are
 attacker-controlled input. Add to `server/params.py`:
@@ -162,7 +162,7 @@ LIMITS = {
 def validate_params(d: dict) -> str | None: ...
 ```
 
-Reject out-of-range rather than clamping — the UI already constrains these, so
+Reject out-of-range rather than clamping - the UI already constrains these, so
 an out-of-range value means a tampered client and should be visible in logs.
 `TICK_RATE` stays server-side and is not client-settable.
 
@@ -171,7 +171,7 @@ Also:
   client: without it, any web page can open sockets against your server.
 - **Token bucket on `QUEUE_MOVE`**: 10 tokens, refill 3/s. Legitimate play is
   mana-bound to ~5 instant moves then ~0.3/s, so this is generous while
-  stopping a flood — each `queue_move` walks the piece list.
+  stopping a flood - each `queue_move` walks the piece list.
 - `max_size=4096` on the socket; per-connection message rate cap.
 - Max 3 rooms and 5 connections per IP.
 - Replace `print` with `logging`.
@@ -182,9 +182,9 @@ Also:
 
 **Size: ~150 lines.**
 
-### Phase 3 — Browser client
+### Phase 3 - Browser client
 
-New `web/` directory, built with Vite. **No UI framework** — this is a canvas
+New `web/` directory, built with Vite. **No UI framework** - this is a canvas
 plus a handful of form controls; React would be more code, not less.
 
 | File | Replaces | Est. |
@@ -198,7 +198,7 @@ plus a handful of form controls; React would be more code, not less.
 | `src/main.ts` | `main.py` game loop | ~150 |
 
 **The renderer port is mechanical.** An audit of `renderer.py` found only
-circles, rects, polygons, polylines, text and alpha fills — every one is a
+circles, rects, polygons, polylines, text and alpha fills - every one is a
 direct canvas 2D primitive. The five `SRCALPHA` scratch surfaces disappear
 entirely, since canvas takes `rgba()` fills without needing a surface to blit.
 
@@ -210,7 +210,7 @@ Porting notes:
 - **Threading disappears.** The `threading` + `queue` model in
   `client/main.py:36-69` has no browser analogue and is simply deleted; the
   browser WebSocket is event-driven.
-- **Pointer events, not mouse events** — touch support comes free, and the
+- **Pointer events, not mouse events** - touch support comes free, and the
   existing click-select-then-click-destination input maps onto touch cleanly.
 - `interpolate()` currently `deepcopy`s state every frame
   (`interpolator.py:11`); write the port non-mutating over a scratch buffer.
@@ -220,7 +220,7 @@ Porting notes:
 `server/rules.py:validate_move`, and disagreement means a player clicks and
 nothing happens. The existing `0.99` / `0.9999` fudge factors in
 `_snap_destination` document three past instances of exactly this bug.
-Mitigation — `tools/parity_test.py`: generate N random (piece, click) pairs,
+Mitigation - `tools/parity_test.py`: generate N random (piece, click) pairs,
 run them through the TS snap via `node`, feed the results to the Python
 validator, assert every one is accepted. Runs in CI. **Write this first, port
 the geometry against it.**
@@ -230,19 +230,19 @@ the geometry against it.**
 
 **Size: ~1100 lines TS, replacing ~1800 lines of Python.**
 
-### Phase 4 — Deployment
+### Phase 4 - Deployment
 
-The server imports only `websockets` + stdlib — **no pygame**. So:
+The server imports only `websockets` + stdlib - **no pygame**. So:
 
 - `requirements-server.txt`: just `websockets>=13.0`.
 - `Dockerfile` on `python:3.12-slim`, copying `server/` and `shared/` only.
-- `fly.toml` with `min_machines_running = 1` and a hard cap of one machine —
+- `fly.toml` with `min_machines_running = 1` and a hard cap of one machine -
   rooms live in memory, so a second instance would strand players in different
   worlds. Fly's `*.fly.dev` hostname provides TLS with no domain purchase.
 - Client to Cloudflare Pages, deployed from the repo. Server URL injected at
   build time (`VITE_SERVER_URL`).
 - `/health` via the websockets `process_request` hook returning JSON with room
-  and connection counts — serves uptime checks and basic metrics without
+  and connection counts - serves uptime checks and basic metrics without
   adding a web framework.
 
 - *Verify:* a phone on cellular data loads the page and plays someone on
@@ -251,14 +251,14 @@ The server imports only `websockets` + stdlib — **no pygame**. So:
 
 **Size: ~80 lines of config.**
 
-### Phase 5 — Latency and polish
+### Phase 5 - Latency and polish
 
 - **Ping display**: `PING`/`PONG` every 2s, RTT in the corner. Players want it
   and you want it for bug reports.
 - **Jitter buffer**: `interpolator.py` extrapolates from the last packet using
   time-since-receipt, so jitter becomes visible micro-stutter. Buffer two
   states, render at `now - 100ms`, interpolate between them.
-- **Reconnect UI**: "Opponent disconnected — 27s" overlay from `OPPONENT_LEFT`;
+- **Reconnect UI**: "Opponent disconnected - 27s" overlay from `OPPONENT_LEFT`;
   auto-`REJOIN` when a backgrounded mobile tab wakes.
 - **Shareable links**: `/#ABCD` joins a room directly.
 
@@ -272,8 +272,8 @@ The server imports only `websockets` + stdlib — **no pygame**. So:
 ## 5. Deferred
 
 **Bandwidth optimisation.** ~1 Mbps down per client (§7). Delta encoding plus
-dropping never-changing fields (`type`, `owner`, `has_moved`) would cut 5–10×.
-Do it only if the bill or player reports demand it — it complicates the client
+dropping never-changing fields (`type`, `owner`, `has_moved`) would cut 5-10×.
+Do it only if the bill or player reports demand it - it complicates the client
 for no gameplay gain.
 
 **Accounts, ratings, spectating, match history.** All need a database. None are
@@ -287,7 +287,7 @@ needed for "strangers can play each other."
 
 Phases 1 and 2 are pure server work, headlessly testable, and prerequisites for
 everything else. Doing Phase 4 *before* Phase 3 means the browser client is
-developed against the real deployed server over real TLS from day one — which
+developed against the real deployed server over real TLS from day one - which
 is where the awkward bugs live (mixed content, Origin checks, proxy timeouts),
 and they are much cheaper to find before the client exists than after.
 
@@ -298,7 +298,7 @@ and they are much cheaper to find before the client exists than after.
 - **Egress**: 32 pieces × ~200 B JSON × 20 Hz ≈ 128 KB/s ≈ 1 Mbps per client;
   ~150 MB per 10-minute game. 100 games/month ≈ 15 GB. Free on flat-bandwidth
   hosts, single-digit dollars on Fly, expensive only on AWS-tier egress rates.
-- **Latency**: at 60–120 ms RTT input lands ~1–2 ticks late against a 0.5 s
+- **Latency**: at 60-120 ms RTT input lands ~1-2 ticks late against a 0.5 s
   preparation period. Playable, but the higher-ping player is strictly
   disadvantaged in a simultaneous-move game. Not fixable without input-delay
   equalisation, which is not worth it here.
@@ -306,32 +306,32 @@ and they are much cheaper to find before the client exists than after.
 
 ---
 
-## Appendix A — Files touched
+## Appendix A - Files touched
 
 | File | Change |
 |---|---|
 | `shared/protocol.py` | + lobby message constants |
-| `server/room.py` | **new** — Room, RoomManager |
-| `server/main.py` | rewritten — dispatch loop, no single game |
+| `server/room.py` | **new** - Room, RoomManager |
+| `server/main.py` | rewritten - dispatch loop, no single game |
 | `server/game.py` | + `forfeit()` (~6 lines) |
 | `server/params.py` | + `LIMITS`, `validate_params` |
-| `web/` | **new** — browser client (~1100 lines TS) |
-| `tools/fake_client.py` | **new** — headless test/load client |
-| `tools/parity_test.py` | **new** — TS/Python geometry agreement |
+| `web/` | **new** - browser client (~1100 lines TS) |
+| `tools/fake_client.py` | **new** - headless test/load client |
+| `tools/parity_test.py` | **new** - TS/Python geometry agreement |
 | `Dockerfile`, `fly.toml` | **new** |
 | `client/` | retired to a branch once `web/` reaches parity |
 
 Untouched: `physics.py`, `rules.py`, `pieces.py`.
 
-## Appendix B — Why the server stays Python
+## Appendix B - Why the server stays Python
 
 The tempting alternative is rewriting everything in TS so client and server
 share one language. The real prize would be **sharing the geometry module**:
 the client must predict what `validate_move` will accept, and today that logic
 is implemented twice. The three `0.99` / `0.9999` fudge factors in
 `_snap_destination` exist solely to paper over float disagreement between the
-two implementations, and shared code would delete two of them. (The third — for
-"physics can nudge idle pieces between snapshot and validation" — is a
+two implementations, and shared code would delete two of them. (The third - for
+"physics can nudge idle pieces between snapshot and validation" - is a
 staleness problem that exists in any language.)
 
 It still loses, for one reason: **there is no test suite.** Rewriting ~1100

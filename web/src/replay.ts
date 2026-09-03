@@ -2,7 +2,7 @@
  * Game recording and playback.
  *
  * Every GAME_STATE the server sends is already a complete snapshot, so a
- * recording is just the list of them with arrival times — no separate move log
+ * recording is just the list of them with arrival times - no separate move log
  * to replay against the rules engine, and no chance of the replay disagreeing
  * with what was played. A five-minute game is about 6000 snapshots, which is
  * cheap enough to hold in memory and never touches the server.

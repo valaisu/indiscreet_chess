@@ -5,257 +5,627 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
     <title>Continuous Chess</title>
     <style>
-      :root { color-scheme: dark; }
+      /* Wood and parchment: the page is the table the board sits on, and the
+         cards are the paper on it. Two grounds only: anything on wood uses
+         --text, anything on parchment uses --ink. */
+      :root {
+        color-scheme: dark;
+        --wood-dark: #241a12;
+        --wood: #2f221a;
+        --wood-line: #55402c;
+        --parchment: #f1e4c6;
+        --parchment-warm: #f7eed8;
+        --ink: #3a2a19;
+        --ink-soft: #7a6444;
+        --text: #e9dcbe;
+        --muted: #ad9871;
+        --gold: #c9a227;
+        --good: #2f6b33;
+        --bad: #9c3427;
+      }
       * { box-sizing: border-box; }
       body {
-        margin: 0; background: #1e1e1e; color: #dcdcdc;
+        margin: 0; color: var(--text);
+        background:
+          radial-gradient(120% 90% at 50% -10%, #3b2b1e 0%, #2a1e15 45%, #1d150f 100%);
+        background-color: var(--wood-dark);
         font-family: system-ui, -apple-system, sans-serif;
         height: 100dvh; overflow: hidden;
       }
-      /* The body cannot scroll — the board must never move under a drag — so
-         the lobby and the pre-game screen do their own scrolling. Without this
-         an opened settings panel simply runs off the bottom of the page. */
+      /* The body cannot scroll, because the board must never move under a
+         drag, so the lobby and the pre-game screen do their own scrolling.
+         Without this an opened settings panel simply runs off the bottom. */
       #lobby {
-        max-width: 30rem; margin: 0 auto; padding: 2rem 1.25rem;
-        display: flex; flex-direction: column; gap: 1rem;
-        height: 100dvh; overflow-y: auto;
+        display: flex; flex-direction: column;
+        height: 100dvh; overflow: hidden;
       }
-      h1 { font-size: 1.5rem; margin: 0; }
-      p.lede { margin: 0; color: #9a9a9a; font-size: 0.9rem; line-height: 1.5; }
-      label { display: block; font-size: 0.8rem; color: #9a9a9a; margin-bottom: 0.25rem; }
+      /* The bar is fixed and full width; only the body under it scrolls. It is
+         a column, so a second row of sub-options can be added under the tabs
+         without touching anything else. */
+      #topbar {
+        flex: none;
+        background: linear-gradient(180deg, #3a2a1d 0%, #2b1f16 100%);
+        border-bottom: 1px solid var(--wood-line);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+      }
+      #topbar .bar {
+        display: flex; align-items: center; gap: 1rem;
+        padding: 0.5rem 1.25rem;
+      }
+      #topbar .brand {
+        font-family: Georgia, "Palatino Linotype", serif;
+        font-size: 1.1rem; font-weight: 600; letter-spacing: 0.02em;
+        color: var(--parchment); margin: 0; white-space: nowrap;
+      }
+      #lobby-body { flex: 1; overflow-y: auto; padding: 1.6rem 1.25rem 3rem; }
+      @media (max-width: 30rem) {
+        #topbar .brand { display: none; } /* the tabs matter more than the name */
+        #lobby-body { padding: 1.1rem 0.85rem 2.5rem; }
+      }
+      #lobby-body > .tab { max-width: 40rem; margin: 0 auto; }
+      h1 {
+        font-size: 1.6rem; margin: 0; color: var(--parchment);
+        font-family: Georgia, "Palatino Linotype", serif; font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+      p.lede { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.9rem; line-height: 1.5; }
+
+      /* One box per kind of decision: how to start a game, what the game's
+         rules are, how this device behaves, and reference material. */
+      .panel {
+        background: var(--wood); border: 1px solid var(--wood-line);
+        border-radius: 8px; padding: 0.9rem 1rem 1rem;
+        display: flex; flex-direction: column; gap: 0.7rem;
+      }
+      .panel > h2 {
+        margin: 0; font-size: 0.75rem; text-transform: uppercase;
+        letter-spacing: 0.14em; color: var(--gold); font-weight: 600;
+      }
+      .note { font-size: 0.78rem; color: var(--muted); line-height: 1.45; margin: 0; }
+
+      label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.25rem; }
       input, select {
-        width: 100%; padding: 0.6rem; border-radius: 6px; font-size: 1rem;
-        border: 1px solid #444; background: #2a2a2a; color: #eee;
+        width: 100%; padding: 0.6rem; border-radius: 5px; font-size: 1rem;
+        border: 1px solid var(--wood-line); background: #241a12; color: var(--text);
       }
+      input:focus, select:focus { outline: 1px solid var(--gold); border-color: var(--gold); }
       .row { display: flex; gap: 0.6rem; }
       .row > * { flex: 1; }
-      button {
-        padding: 0.7rem 1rem; border-radius: 6px; border: 1px solid #4a4a6a;
-        background: #32324a; color: #eee; font-size: 0.95rem; cursor: pointer;
+      /* Join is the action, the code is four characters. */
+      .row.join > button { flex: 3; }
+      .row.join > input { flex: 1; text-align: center; letter-spacing: 0.1em; }
+
+      /* A full-width button with a question mark parked at its right edge. */
+      .line { position: relative; display: flex; }
+      .line > button { flex: 1; }
+      .help {
+        position: absolute; right: 0.6rem; top: 50%; transform: translateY(-50%);
+        width: 1.2rem; height: 1.2rem; border-radius: 50%; cursor: help;
+        border: 1px solid var(--wood-line); color: var(--muted);
+        font-size: 0.72rem; line-height: 1.1rem; text-align: center;
       }
-      button:hover { background: #40406a; }
-      button.primary { background: #46648c; border-color: #5a7fae; }
-      details summary { cursor: pointer; color: #9a9a9a; font-size: 0.85rem; }
-      .params { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; margin-top: 0.75rem; }
-      #status { min-height: 1.25rem; font-size: 0.85rem; color: #8ac08a; }
-      #status.error { color: #d98080; }
+      .help:hover, .help:focus { color: var(--gold); border-color: var(--gold); outline: none; }
+      .help::after {
+        content: attr(data-tip);
+        position: absolute; right: -0.5rem; top: 150%; z-index: 5;
+        width: 17rem; padding: 0.55rem 0.7rem; text-align: left;
+        background: #241a12; border: 1px solid var(--wood-line); border-radius: 6px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+        color: var(--text); font-size: 0.78rem; line-height: 1.45;
+        opacity: 0; visibility: hidden; transition: opacity 0.12s;
+      }
+      .help:hover::after, .help:focus::after { opacity: 1; visibility: visible; }
+      /* Next to a heading rather than parked on a button. */
+      .help.inline {
+        position: relative; right: auto; top: auto; transform: none;
+        display: inline-block; vertical-align: middle; margin-left: 0.45rem;
+      }
+      .help.inline::after { right: auto; left: -0.5rem; }
+
+      /* One row, one choice. */
+      .segmented {
+        display: flex; border: 1px solid var(--wood-line);
+        border-radius: 5px; overflow: hidden;
+      }
+      .segmented button {
+        flex: 1; border: none; border-right: 1px solid var(--wood-line);
+        border-radius: 0; background: #241a12; color: var(--muted);
+        padding: 0.55rem 0.4rem; font-size: 0.9rem;
+      }
+      .segmented button:last-child { border-right: none; }
+      .segmented button:hover { background: #3b2b1e; color: var(--text); }
+      .segmented button.on { background: #7a5220; color: #fdf3dc; }
+      button {
+        padding: 0.7rem 1rem; border-radius: 5px; border: 1px solid var(--wood-line);
+        background: #3b2b1e; color: var(--text); font-size: 0.95rem; cursor: pointer;
+      }
+      button:hover { background: #4a3524; border-color: #7a5c3c; }
+      button.primary { background: #7a5220; border-color: var(--gold); color: #fdf3dc; }
+      button.primary:hover { background: #8f6127; }
+      button.danger { border-color: #8c4a3a; }
+      button.danger:hover { background: #5c2f24; border-color: #b4604a; }
+      details summary { cursor: pointer; color: var(--muted); font-size: 0.85rem; }
+      details[open] summary { margin-bottom: 0.5rem; }
+      .params { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+      #status { min-height: 1.25rem; font-size: 0.85rem; color: #9ec27e; }
+      #status.error { color: #dd8f78; }
+
       #game { display: none; position: relative; height: 100dvh; }
       #board { width: 100%; height: 100%; display: block; touch-action: none; }
       #pregame { display: none; max-width: 46rem; margin: 0 auto;
                  padding: 2rem 1.25rem; height: 100dvh; overflow-y: auto; }
       .cards { display: grid; gap: 0.6rem; margin: 0.75rem 0;
                grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); }
-      .card { border: 1px solid #3a3a3a; border-radius: 8px; padding: 0.7rem 0.8rem;
-              background: #262626; }
+      .card {
+        border: 1px solid #b3945f; border-radius: 6px; padding: 0.7rem 0.8rem;
+        background: var(--parchment); color: var(--ink);
+        box-shadow: 0 1px 3px rgba(0,0,0,0.35);
+      }
       .card.pick { cursor: pointer; }
-      .card.pick:hover { border-color: #5a5a7a; }
-      .card.on { border-color: #6f8fbf; background: #2b3242; }
-      .card h3 { margin: 0 0 0.2rem; font-size: 0.95rem; }
-      .card .flavour { margin: 0 0 0.5rem; font-size: 0.78rem; color: #9a9a9a;
-                       line-height: 1.35; }
+      .card.pick:hover { border-color: var(--gold); background: var(--parchment-warm); }
+      .card.on {
+        border-color: var(--gold); background: var(--parchment-warm);
+        box-shadow: 0 0 0 2px rgba(201,162,39,0.55), 0 1px 3px rgba(0,0,0,0.35);
+      }
+      .card .head { display: flex; align-items: center; gap: 0.55rem; margin-bottom: 0.5rem; }
+      .civ-icon { width: 2rem; height: 2rem; flex: none; color: #6b4a22; }
+      .card.on .civ-icon { color: #8a5c14; }
+      .card h3 {
+        margin: 0; font-size: 1rem; color: var(--ink);
+        font-family: Georgia, "Palatino Linotype", serif; font-weight: 600;
+      }
+      .card .title {
+        margin: 0; font-size: 0.76rem; color: var(--ink-soft);
+        letter-spacing: 0.06em; text-transform: uppercase;
+      }
+      /* Which seat has taken this civilization. Only solo holds two of them. */
+      .card .tag {
+        margin-left: auto; font-size: 0.72rem; letter-spacing: 0.08em;
+        color: #8a5c14; white-space: nowrap; font-weight: 600;
+      }
       .card ul { margin: 0; padding: 0; list-style: none; font-size: 0.8rem; }
       .card li { display: flex; justify-content: space-between; gap: 0.5rem;
-                 padding: 0.1rem 0; }
+                 padding: 0.1rem 0; border-top: 1px solid rgba(122,100,68,0.22); }
       .card li .amt { font-variant-numeric: tabular-nums; }
-      .good .amt { color: #8ac08a; }
-      .bad .amt { color: #d98080; }
-      #pg-status { min-height: 1.5rem; font-size: 0.9rem; color: #9a9a9a; }
+      .good .amt { color: var(--good); }
+      .bad .amt { color: var(--bad); }
+
+      .seats { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+      .seats button { flex: none; padding: 0.4rem 0.9rem; font-size: 0.85rem; }
+      .seats button.on { background: #7a5220; border-color: var(--gold); color: #fdf3dc; }
+      #pg-status { min-height: 1.5rem; font-size: 0.9rem; color: var(--muted); }
+      #pg-buttons { display: flex; gap: 0.6rem; }
+
       #banner {
         display: none; position: absolute; top: 1rem; left: 50%;
-        transform: translateX(-50%); background: rgba(0,0,0,0.75);
+        transform: translateX(-50%); background: rgba(36,26,18,0.9);
+        border: 1px solid var(--wood-line);
         padding: 0.5rem 1rem; border-radius: 6px; font-size: 0.9rem;
       }
       #btn-precise {
         position: absolute; top: 0.75rem; left: 0.75rem; padding: 0.4rem 0.7rem;
         font-size: 0.8rem; opacity: 0.6;
       }
-      #btn-precise.on { opacity: 1; background: #46648c; border-color: #7fa8d8; }
+      #btn-precise.on { opacity: 1; background: #7a5220; border-color: var(--gold); }
+      #game-bar {
+        position: absolute; top: 0.75rem; right: 0.75rem; display: flex; gap: 0.4rem;
+      }
+      #game-bar button { padding: 0.4rem 0.7rem; font-size: 0.8rem; }
       #postgame {
         display: none; position: absolute; left: 50%; bottom: 12%;
         transform: translateX(-50%); text-align: center;
-        background: rgba(0,0,0,0.8); padding: 0.9rem 1.1rem; border-radius: 8px;
+        background: rgba(36,26,18,0.94); border: 1px solid var(--wood-line);
+        padding: 0.9rem 1.1rem; border-radius: 8px;
       }
-      #pg-result { font-size: 1.1rem; margin-bottom: 0.6rem; color: #ffdc64; }
+      #pg-result {
+        font-size: 1.15rem; margin-bottom: 0.6rem; color: var(--gold);
+        font-family: Georgia, "Palatino Linotype", serif;
+      }
       #replay-bar {
         display: none; position: absolute; left: 50%; bottom: 1rem;
         transform: translateX(-50%); align-items: center; gap: 0.5rem;
-        background: rgba(0,0,0,0.8); padding: 0.5rem 0.7rem; border-radius: 8px;
+        background: rgba(36,26,18,0.94); border: 1px solid var(--wood-line);
+        padding: 0.5rem 0.7rem; border-radius: 8px;
         max-width: 95vw;
       }
       #replay-bar button { padding: 0.35rem 0.55rem; font-size: 0.8rem; }
-      #replay-bar button.on { background: #46648c; border-color: #7fa8d8; }
-      #rp-seek { width: min(40vw, 16rem); }
-      #rp-time { font-size: 0.78rem; color: #9a9a9a;
+      #replay-bar button.on { background: #7a5220; border-color: var(--gold); }
+      #rp-seek { width: min(40vw, 16rem); accent-color: var(--gold); }
+      #rp-time { font-size: 0.78rem; color: var(--muted);
                  font-variant-numeric: tabular-nums; white-space: nowrap; }
-      .opts { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.75rem; }
+
+      /* Tabs. `hidden` needs the explicit rule because .tab sets a display. */
+      /* min-width lets the nav shrink and scroll instead of pushing the last
+         tab off a narrow screen, where the page itself cannot scroll sideways. */
+      #tabs {
+        display: flex; gap: 0.15rem; margin-left: auto;
+        overflow-x: auto; min-width: 0;
+      }
+      #tabs button {
+        flex: none; padding: 0.45rem 0.85rem; font-size: 0.9rem;
+        background: none; border: 1px solid transparent; border-radius: 4px 4px 0 0;
+        color: var(--muted); white-space: nowrap;
+      }
+      #tabs button:hover { background: rgba(255, 255, 255, 0.05); color: var(--text); }
+      #tabs button.on {
+        color: var(--gold); background: rgba(201, 162, 39, 0.1);
+        border-bottom: 2px solid var(--gold);
+      }
+      .tab { display: flex; flex-direction: column; gap: 1.1rem; }
+      .tab[hidden] { display: none; }
+
+      /* Rules: prose, so it gets a reading measure and real paragraphs. */
+      .rules h3 {
+        margin: 1.1rem 0 0.3rem; font-size: 0.95rem; color: var(--parchment);
+        font-family: Georgia, "Palatino Linotype", serif;
+      }
+      .rules h3:first-child { margin-top: 0; }
+      .rules p, .rules li { font-size: 0.85rem; line-height: 1.55; color: var(--text); }
+      .rules p { margin: 0 0 0.5rem; }
+      .rules ul { margin: 0 0 0.5rem; padding-left: 1.1rem; }
+      .rules em { color: var(--muted); font-style: normal; }
+
+      /* One finished game. */
+      .match {
+        display: flex; align-items: center; gap: 0.7rem;
+        border-top: 1px solid var(--wood-line); padding: 0.55rem 0;
+      }
+      .match .what { flex: 1; font-size: 0.85rem; }
+      .match .when { display: block; color: var(--muted); font-size: 0.75rem; }
+      .match .result { font-weight: 600; }
+      .match .win { color: #9ec27e; }
+      .match .loss { color: #dd8f78; }
+      .match button { flex: none; padding: 0.35rem 0.6rem; font-size: 0.78rem; }
+      .match .gone { flex: none; color: var(--muted); font-size: 0.75rem; }
+
+      .opts { display: flex; flex-direction: column; gap: 0.6rem; }
       .opts .check { display: flex; align-items: center; gap: 0.5rem; }
-      .opts .check input { width: auto; }
-      .opts .check label { margin: 0; color: #dcdcdc; font-size: 0.85rem; }
-      .opts .note { margin: 0; font-size: 0.78rem; color: #8a8a8a; line-height: 1.4; }
+      .opts .check input { width: auto; accent-color: var(--gold); }
+      .opts .check label { margin: 0; color: var(--text); font-size: 0.85rem; }
     </style>
   </head>
   <body>
     <div id="lobby">
-      <h1>Continuous Chess</h1>
-      <p class="lede">
-        Real-time chess. Both players move at once, moves cost mana, and pieces
-        capture by collision. Create a room and share the code, or take whoever
-        is waiting.
-      </p>
-
-      <div>
-        <label for="server-url">Server</label>
-        <input id="server-url" spellcheck="false" />
-      </div>
-
-      <button id="btn-quick" class="primary">Quick match</button>
-
-      <div class="row">
-        <button id="btn-create">Create room</button>
-        <button id="btn-solo">Solo practice</button>
-      </div>
-
-      <div>
-        <label for="room-code">Room code</label>
-        <div class="row">
-          <input id="room-code" maxlength="4" spellcheck="false"
-                 style="text-transform: uppercase" />
-          <button id="btn-join">Join</button>
+      <header id="topbar">
+        <div class="bar">
+          <h1 class="brand">Continuous Chess</h1>
+          <nav id="tabs">
+            <button data-tab="play" class="on">Play</button>
+            <button data-tab="settings">Settings</button>
+            <button data-tab="rules">Rules</button>
+            <button data-tab="profile">Profile</button>
+          </nav>
         </div>
-      </div>
+      </header>
 
-      <div id="status"></div>
-
-      <div>
-        <label for="mode">Tempo</label>
-        <select id="mode">
-          <option value="bullet">Bullet — time to recapture</option>
-          <option value="rapid">Rapid — time to dodge a long move</option>
-          <option value="slow">Slow — time to intercept a moving piece</option>
-          <option value="custom">Custom</option>
-        </select>
-      </div>
-
-      <details>
-        <summary>What the civilizations do</summary>
-        <div id="civ-reference" class="cards"></div>
-      </details>
-
-      <details>
-        <summary>Controls</summary>
-        <div class="opts">
-          <div>
-            <label for="s-movemode">Moving a piece</label>
-            <select id="s-movemode">
-              <option value="both">Drag or click</option>
-              <option value="click">Click only</option>
-              <option value="drag">Drag only</option>
-            </select>
+      <div id="lobby-body">
+      <section id="tab-play" class="tab">
+        <p class="lede">
+          Real-time chess. Both players move at once, moves cost mana, and
+          pieces capture by collision.
+        </p>
+        <section class="panel">
+          <h2>Start a game</h2>
+          <button id="btn-quick">Quick match</button>
+          <button id="btn-create">Create room</button>
+          <div class="line">
+            <button id="btn-solo">Solo practice</button>
+            <span class="help" tabindex="0" role="note"
+                  aria-label="What solo practice is"
+                  data-tip="Both sides are yours, with a civilization chosen for
+                            each. Nobody else can join, and you can move either
+                            colour.">?</span>
           </div>
-          <div>
-            <label for="s-drag">Shortest drag that counts as a move (squares)</label>
-            <input id="s-drag" type="number" step="0.05" min="0" />
+          <div class="row join">
+            <button id="btn-join">Join</button>
+            <input id="room-code" maxlength="4" spellcheck="false"
+                   placeholder="Code" aria-label="Room code"
+                   style="text-transform: uppercase" />
           </div>
-          <div class="check">
-            <input id="s-hints" type="checkbox" />
-            <label for="s-hints">Show move hints</label>
+          <div id="status"></div>
+        </section>
+
+        <section class="panel">
+          <h2>Tempo<span class="help inline" tabindex="0" role="note"
+                aria-label="Where the tempo applies"
+                data-tip="Applies to a room you open. Joining a room uses that
+                          room's tempo instead.">?</span></h2>
+          <div id="tempo-bar" class="segmented">
+            <button data-mode="bullet" class="on">Bullet</button>
+            <button data-mode="rapid">Rapid</button>
+            <button data-mode="slow">Slow</button>
+            <button data-mode="custom">Custom</button>
           </div>
+          <p class="note" id="mode-note"></p>
+        </section>
+
+        <section class="panel">
+          <h2>What players can see</h2>
           <p class="note">
-            A drag shorter than the threshold selects the piece instead of
-            moving it, which is what makes a very short move hard to issue.
-            Hold Shift — or press Precise on the board, for a touchscreen — to
-            let any distance count and to brighten the hints.
+            Set by whoever opens the room and applied to both sides. Hidden
+            information is never sent to either client, so it cannot be read out
+            of the connection.
           </p>
-        </div>
-      </details>
+          <div class="opts">
+            <div class="check">
+              <input id="v-mana" type="checkbox" data-view="enemy_mana" />
+              <label for="v-mana">Opponent's mana</label>
+            </div>
+            <div class="check">
+              <input id="v-prep" type="checkbox" data-view="enemy_prep" />
+              <label for="v-prep">Opponent's preparation (a move about to start)</label>
+            </div>
+            <div class="check">
+              <input id="v-cool" type="checkbox" data-view="enemy_cooldown" />
+              <label for="v-cool">Opponent's cooldowns</label>
+            </div>
+            <div class="check">
+              <input id="v-dest" type="checkbox" data-view="enemy_dest" />
+              <label for="v-dest">Where opponent's moves are headed</label>
+            </div>
+          </div>
+        </section>
 
-      <details>
-        <summary>What players can see</summary>
-        <div class="opts">
-          <div class="check">
-            <input id="v-mana" type="checkbox" data-view="enemy_mana" />
-            <label for="v-mana">Opponent's mana</label>
-          </div>
-          <div class="check">
-            <input id="v-prep" type="checkbox" data-view="enemy_prep" />
-            <label for="v-prep">Opponent's preparation (a move about to start)</label>
-          </div>
-          <div class="check">
-            <input id="v-cool" type="checkbox" data-view="enemy_cooldown" />
-            <label for="v-cool">Opponent's cooldowns</label>
-          </div>
-          <div class="check">
-            <input id="v-dest" type="checkbox" data-view="enemy_dest" />
-            <label for="v-dest">Where opponent's moves are headed</label>
-          </div>
+        <section class="panel">
+          <h2>Every parameter</h2>
           <p class="note">
-            Set by whoever opens the room, and applied to both sides. Hidden
-            information is never sent to either client, so it cannot be read
-            out of the connection.
+            The tempo presets set these. Editing one switches the tempo to
+            Custom, and a custom room is never rated.
           </p>
-        </div>
-      </details>
+          <div class="params">
+            <div>
+              <label for="p-refill">Mana / sec</label>
+              <input id="p-refill" data-param="mana_refill_rate" type="number"
+                     step="0.05" value="0.3" />
+            </div>
+            <div>
+              <label for="p-max">Max mana</label>
+              <input id="p-max" data-param="maximum_mana" type="number"
+                     step="0.5" value="5" />
+            </div>
+            <div>
+              <label for="p-prep">Prep (s)</label>
+              <input id="p-prep" data-param="preparation_period" type="number"
+                     step="0.1" value="0.5" />
+            </div>
+            <div>
+              <label for="p-cool">Cooldown (s)</label>
+              <input id="p-cool" data-param="cooldown" type="number"
+                     step="0.1" value="0.8" />
+            </div>
+            <div>
+              <label for="p-speed">Speed</label>
+              <input id="p-speed" data-param="movement_speed" type="number"
+                     step="0.5" value="4" />
+            </div>
+            <div>
+              <label for="p-freedom">Freedom (deg)</label>
+              <input id="p-freedom" data-param="movement_freedom_deg" type="number"
+                     step="1" value="5" />
+            </div>
+            <div>
+              <label for="p-base-cost">Move cost</label>
+              <input id="p-base-cost" data-param="base_move_cost" type="number"
+                     step="0.1" value="1" />
+            </div>
+            <div>
+              <label for="p-dist-cost">Cost / distance</label>
+              <input id="p-dist-cost" data-param="distance_cost" type="number"
+                     step="0.05" value="0.2" />
+            </div>
+            <div>
+              <label for="p-size">Piece size</label>
+              <input id="p-size" data-param="diameter_piece" type="number"
+                     step="0.05" value="0.6" />
+            </div>
+          </div>
+        </section>
+      </section>
 
-      <details>
-        <summary>Game settings</summary>
-        <div class="params">
-          <div>
-            <label for="p-refill">Mana / sec</label>
-            <input id="p-refill" data-param="mana_refill_rate" type="number"
-                   step="0.05" value="0.3" />
+      <section id="tab-settings" class="tab" hidden>
+        <section class="panel">
+          <h2>Your controls</h2>
+          <p class="note">Personal. Saved on this device and sent to nobody.</p>
+          <div class="opts">
+            <div>
+              <label for="s-movemode">Moving a piece</label>
+              <select id="s-movemode">
+                <option value="both">Drag or click</option>
+                <option value="click">Click only</option>
+                <option value="drag">Drag only</option>
+              </select>
+            </div>
+            <div>
+              <label for="s-drag">Shortest drag that counts as a move (squares)</label>
+              <input id="s-drag" type="number" step="0.05" min="0" />
+            </div>
+            <div class="check">
+              <input id="s-hints" type="checkbox" />
+              <label for="s-hints">Show move hints</label>
+            </div>
+            <div>
+              <label for="s-precise">Precise key</label>
+              <select id="s-precise">
+                <option value="Shift">Shift</option>
+                <option value="Control">Control</option>
+                <option value="Alt">Alt</option>
+              </select>
+            </div>
+            <p class="note">
+              A drag shorter than the threshold selects the piece instead of
+              moving it, which is what makes a very short move hard to issue.
+              Holding the precise key, or pressing Precise on the board for a
+              touchscreen, lets any distance count and brightens the hints.
+            </p>
           </div>
-          <div>
-            <label for="p-max">Max mana</label>
-            <input id="p-max" data-param="maximum_mana" type="number"
-                   step="0.5" value="5" />
-          </div>
-          <div>
-            <label for="p-prep">Prep (s)</label>
-            <input id="p-prep" data-param="preparation_period" type="number"
-                   step="0.1" value="0.5" />
-          </div>
-          <div>
-            <label for="p-cool">Cooldown (s)</label>
-            <input id="p-cool" data-param="cooldown" type="number"
-                   step="0.1" value="0.8" />
-          </div>
-          <div>
-            <label for="p-speed">Speed</label>
-            <input id="p-speed" data-param="movement_speed" type="number"
-                   step="0.5" value="4" />
-          </div>
-          <div>
-            <label for="p-freedom">Freedom (deg)</label>
-            <input id="p-freedom" data-param="movement_freedom_deg" type="number"
-                   step="1" value="5" />
-          </div>
-          <div>
-            <label for="p-base-cost">Move cost</label>
-            <input id="p-base-cost" data-param="base_move_cost" type="number"
-                   step="0.1" value="1" />
-          </div>
-          <div>
-            <label for="p-dist-cost">Cost / distance</label>
-            <input id="p-dist-cost" data-param="distance_cost" type="number"
-                   step="0.05" value="0.2" />
-          </div>
-          <div>
-            <label for="p-size">Piece size</label>
-            <input id="p-size" data-param="diameter_piece" type="number"
-                   step="0.05" value="0.6" />
-          </div>
-        </div>
-      </details>
+        </section>
+
+      </section>
+
+      <section id="tab-rules" class="tab" hidden>
+        <section class="panel rules">
+          <h2>How it works</h2>
+
+          <h3>No turns</h3>
+          <p>
+            The board is continuous and both players play at once. A piece is a
+            circle, its position is its centre, and it moves in a straight line
+            to wherever you send it. There is no board of squares underneath:
+            the squares are only a drawing.
+          </p>
+
+          <h3>Mana</h3>
+          <p>
+            Queuing a move costs mana, which refills continuously up to a cap.
+            The cost is a flat amount plus a rate for the distance, taken the
+            moment you queue the move and never refunded. Mana is the only
+            limit on how often you can move.
+          </p>
+
+          <h3>A move, in three phases</h3>
+          <ul>
+            <li><strong>Preparation.</strong> The piece stands still for a moment,
+                showing that something is coming.</li>
+            <li><strong>Movement.</strong> It travels at a fixed speed. This is
+                the only phase in which it counts as moving.</li>
+            <li><strong>Cooldown.</strong> It rests where it stopped and cannot
+                be given a new move.</li>
+          </ul>
+          <p>
+            A piece captured during its preparation loses the move and the mana.
+          </p>
+
+          <h3>Where pieces may go</h3>
+          <p>
+            Rook, bishop and queen keep their directions and have no range
+            limit. King and pawn keep their directions and reach one square,
+            or one diagonal. Every direction is a narrow cone rather than a
+            line, so a move can be aimed a few degrees off true. The knight
+            has eight landing circles instead of eight squares.
+          </p>
+
+          <h3>Capture, in general</h3>
+          <p>
+            The general rule holds for the rook, the bishop, the queen and the
+            king. Both pawn moves and the knight are exceptions, and the
+            exceptions matter, so they have their own sections below.
+          </p>
+          <ul>
+            <li>A moving piece captures an enemy the instant their hitboxes
+                touch, then carries on in the same direction and stops level
+                with where that piece stood, or at its destination if that
+                comes first.</li>
+            <li>If both pieces were moving when they touched, both are removed.</li>
+            <li><strong>One enemy per move.</strong> After that the piece is
+                spent: the next thing it touches blocks it instead, and it stops
+                there.</li>
+            <li>Your own pieces are never captured and never passed through. A
+                move that would run into one stops at the point of contact,
+                having done nothing else.</li>
+            <li>A piece touched while it is still preparing is captured
+                normally, and loses both the queued move and the mana.</li>
+          </ul>
+
+          <h3>Pawns</h3>
+          <p>
+            <strong>A pawn moving forward cannot capture at all.</strong> It
+            stops the moment it touches any piece, enemy or friendly. It can
+            still be captured by an enemy that moves into it. From its starting
+            square it may go two squares instead of one.
+          </p>
+          <p>
+            A pawn captures only by moving diagonally forward, and that move is
+            legal only if an enemy is already sitting on the landing point when
+            you queue it. In flight the pawn cannot be touched and touches
+            nothing, passing straight through enemies; its own side still stops
+            it. On arrival it takes the <em>one</em> enemy nearest the landing
+            point, and if that piece was itself moving, the pawn goes with it.
+          </p>
+          <p>
+            A pawn that has just made a double move can be taken in passing.
+            It leaves a marker where it crossed, and an enemy pawn capturing
+            that marker removes the pawn itself. The marker lasts until the
+            opponent's next move.
+          </p>
+          <p>
+            A pawn promotes to a queen when its <em>centre</em> reaches the last
+            rank. The move it is executing carries on unchanged: same
+            direction, same immunity, same one capture already spent.
+          </p>
+
+          <h3>Knights</h3>
+          <p>
+            The knight breaks the general rules above, in its favour and
+            against it.
+          </p>
+          <ul>
+            <li>In flight it can neither capture nor be captured, and nothing
+                blocks it. It always completes its jump.</li>
+            <li>On arrival it removes <strong>every</strong> piece its hitbox
+                overlaps, however many, <strong>friendly ones included</strong>.
+                Landing on your own king loses you the game.</li>
+            <li>If any piece it removes was moving at that moment, the knight is
+                removed too.</li>
+          </ul>
+
+          <h3>Castling</h3>
+          <p>
+            Queue a king move of more than one and up to two squares sideways.
+            King and rook set off together and arrive together, overlapping on
+            the way.
+          </p>
+
+          <h3>Winning</h3>
+          <p>
+            Take the enemy king. There is no check and no checkmate, so a king
+            may walk anywhere, including somewhere it can be taken. Two kings
+            colliding is a draw.
+          </p>
+        </section>
+
+        <section class="panel">
+          <h2>Civilizations</h2>
+          <p class="note">
+            A side you choose before the game, worth about the same as any
+            other: every buff is paid for with a matching drawback.
+          </p>
+          <div id="civ-reference" class="cards"></div>
+        </section>
+      </section>
+
+      <section id="tab-profile" class="tab" hidden>
+        <section class="panel">
+          <h2>Match history</h2>
+          <p class="note" id="pf-summary"></p>
+          <div id="pf-list"></div>
+          <p class="note">
+            Results are kept in this browser. A replay is the snapshots the
+            server sent, held in memory, so it lasts as long as this tab stays
+            open: reloading keeps the result and loses the recording. Nothing
+            is stored on the server, and there are no accounts yet.
+          </p>
+          <button id="btn-clear-history">Clear history</button>
+        </section>
+      </section>
+      </div>
     </div>
 
     <div id="pregame">
       <h1>Room <span id="pg-code"></span></h1>
-      <p class="lede">
+      <p class="lede" id="pg-lede">
         Pick a civilization. Your opponent cannot see your choice until the
         game begins.
       </p>
+      <div id="pg-seats" class="seats" style="display: none">
+        <span class="note">Choosing for</span>
+        <button id="seat-white" class="on">White</button>
+        <button id="seat-black">Black</button>
+      </div>
       <div id="civ-cards" class="cards"></div>
-      <button id="btn-ready" class="primary">Ready</button>
+      <div id="pg-buttons">
+        <button id="btn-ready" class="primary">Ready</button>
+        <button id="btn-pg-exit">Exit to lobby</button>
+      </div>
       <div id="pg-status"></div>
     </div>
 
@@ -263,11 +633,15 @@
       <canvas id="board"></canvas>
       <div id="banner"></div>
       <button id="btn-precise" title="Any drag distance counts as a move">Precise</button>
+      <div id="game-bar">
+        <button id="btn-resign" class="danger">Resign</button>
+        <button id="btn-exit">Exit to lobby</button>
+      </div>
       <div id="postgame">
         <div id="pg-result"></div>
         <div class="row">
           <button id="btn-replay" class="primary">Watch replay</button>
-          <button id="btn-newgame">New game</button>
+          <button id="btn-newgame">Exit to lobby</button>
         </div>
       </div>
       <div id="replay-bar">
@@ -275,7 +649,7 @@
         <span id="rp-speeds"></span>
         <input id="rp-seek" type="range" min="0" max="1000" value="0" />
         <span id="rp-time"></span>
-        <button id="rp-exit">Close</button>
+        <button id="rp-exit">Close replay</button>
       </div>
     </div>
 

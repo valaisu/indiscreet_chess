@@ -32,7 +32,7 @@ def _load_font(size: int) -> pygame.font.Font:
 WIN_W = 800
 WIN_H = 840
 
-# Legacy module-level values — used by main.py to compute _CLICK_R_BOARD
+# Legacy module-level values - used by main.py to compute _CLICK_R_BOARD
 # (which is scale-independent, expressed in board units)
 SQ      = 80
 PIECE_R = 24   # int(0.3 * SQ)
@@ -67,15 +67,15 @@ C_MANA_BLACK   = (180,  60,  60)
 
 C_TEXT         = (220, 220, 220)
 C_OVERLAY      = (  0,   0,   0, 160)
-C_TIMER_PREP   = (220, 185,  50)   # gold  — preparation arc
-C_TIMER_COOL   = ( 70, 160, 220)   # blue  — cooldown arc
+C_TIMER_PREP   = (220, 185,  50)   # gold  - preparation arc
+C_TIMER_COOL   = ( 70, 160, 220)   # blue  - cooldown arc
 C_WIN_TEXT     = (255, 220, 100)
 C_HINT_OK      = (100, 210, 100,  80)  # affordable + legal
 C_HINT_NO_MANA = (220, 140,  40,  80)  # legal direction, not enough mana
 C_HINT_ILLEGAL = (180,  60,  60,  80)  # move not currently legal
 C_SNAP_ZONE    = ( 70, 130, 220,  50)  # debug: expanded snap zone
 
-# Mirrors server/params.py defaults — used for hint rendering
+# Mirrors server/params.py defaults - used for hint rendering
 _BASE_MOVE_COST = 1.0
 _DISTANCE_COST  = 0.2
 _DIAMETER_PIECE = 0.6

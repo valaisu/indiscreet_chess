@@ -16,7 +16,7 @@ SERVER_PORT: int = 8765
 # Params arrive over the wire from a public page, so they are untrusted input.
 # Out-of-range values are rejected rather than clamped: the UI already
 # constrains them, so anything outside these bounds means a tampered client
-# and should be visible in the logs. TICK_RATE is deliberately absent — it
+# and should be visible in the logs. TICK_RATE is deliberately absent - it
 # stays server-side and is not client-settable.
 LIMITS: dict[str, tuple[float, float]] = {
     "mana_refill_rate":     (0.01, 10.0),
@@ -114,13 +114,13 @@ def validate_params(d: object) -> str | None:
 # What each player is allowed to see of the opponent. The defaults reproduce
 # the game as it was before these were settable: you never saw the enemy's
 # mana, but you saw every timer and every destination marker. Hiding is done
-# on the server, not in the renderer — anything sent to a client is knowable
+# on the server, not in the renderer - anything sent to a client is knowable
 # by that client, whatever it chooses to draw.
 VIEW_DEFAULTS: dict[str, bool] = {
     "enemy_mana":     False,   # opponent's mana bar
     "enemy_prep":     True,    # opponent's pieces show they are preparing a move
     "enemy_cooldown": True,    # opponent's pieces show they are on cooldown
-    "enemy_dest":     True,    # markers for where opponent's moves are headed
+    "enemy_dest":     False,   # markers for where opponent's moves are headed
 }
 
 
