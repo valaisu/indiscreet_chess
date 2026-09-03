@@ -21,7 +21,7 @@ import websockets
 from websockets.asyncio.server import serve
 
 from . import civs, params, room as room_mod
-from .room import Connection, RoomManager, RUNNING
+from .room import Connection, RoomManager, FINISHED, RUNNING
 from shared import protocol
 
 log = logging.getLogger("server")
@@ -214,6 +214,25 @@ class Hub:
         log.info("room %s: %s resigns", room.code, color)
         room.game.forfeit(color)
 
+    async def on_rematch(self, conn: Connection, msg: dict) -> None:
+        """Play the same room again. The seats and the tempo stay; both sides
+        pick a civilization and ready up through the ordinary path.
+
+        Idempotent on purpose: both players will press it, and the second
+        press arrives at a room already back in the lobby. Answering that with
+        an error would put a failure on the screen of whoever was slower."""
+        room = conn.room
+        if room is None or conn.color is None or room.state == RUNNING:
+            return
+        if room.state == FINISHED:
+            if not room.solo and any(room.clients[c] is None
+                                     for c in ("white", "black")):
+                await conn.error("your opponent has left")
+                return
+            log.info("room %s: rematch", room.code)
+            room.reset_for_rematch()
+        await room.notify_state()
+
     async def on_leave(self, conn: Connection, msg: dict) -> None:
         if conn.room is not None:
             await conn.room.on_disconnect(conn)
@@ -239,6 +258,8 @@ class Hub:
             await self.on_resign(conn, msg)
         elif kind == protocol.LEAVE_ROOM:
             await self.on_leave(conn, msg)
+        elif kind == protocol.REMATCH:
+            await self.on_rematch(conn, msg)
         elif kind == protocol.PING:
             await conn.send({"type": protocol.PONG, "t": msg.get("t"),
                              "server_time": time.time()})

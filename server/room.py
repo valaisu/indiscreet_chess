@@ -22,7 +22,7 @@ LOBBY, RUNNING, FINISHED = "lobby", "running", "finished"
 
 DISCONNECT_GRACE = 30.0     # seconds a player may be gone before forfeiting
 LOBBY_TTL        = 900.0    # unjoined rooms expire after 15 minutes
-FINISHED_TTL     = 60.0     # finished rooms linger briefly so clients see the result
+FINISHED_TTL     = 300.0    # finished rooms stay rematchable; a replay takes minutes
 GC_INTERVAL      = 30.0
 
 OPPOSITE = {"white": "black", "black": "white"}
@@ -177,6 +177,21 @@ class Room:
         if ready:
             self.params[color] = civs.resolve(self.base_params, civ)
 
+    def reset_for_rematch(self) -> None:
+        """Put a finished room back in the lobby with the same seats and the
+        same tempo. Readiness and civilizations are cleared rather than
+        carried over: picking again is most of the reason to want a rematch,
+        and it puts the room back through the one path that starts a game."""
+        self.game = None
+        self.task = None
+        self.state = LOBBY
+        self.finished_at = None
+        self.created_at = time.monotonic()   # LOBBY_TTL starts again
+        self.ready = {"white": False, "black": False}
+        self.civ = {"white": None, "black": None}
+        self.params = {"white": dict(self.base_params),
+                       "black": dict(self.base_params)}
+
     # -- lifecycle ----------------------------------------------------------
 
     def start_if_ready(self) -> None:
@@ -258,8 +273,11 @@ class Room:
         if self.state == LOBBY:
             return self.occupants() == 0 or time.monotonic() - self.created_at > LOBBY_TTL
         if self.state == FINISHED:
-            return (self.finished_at is not None
-                    and time.monotonic() - self.finished_at > FINISHED_TTL)
+            # Empty goes at once: the long TTL exists so the players still
+            # sitting there can agree a rematch, not to keep a husk alive.
+            return (self.occupants() == 0
+                    or (self.finished_at is not None
+                        and time.monotonic() - self.finished_at > FINISHED_TTL))
         return False
 
     def shutdown(self) -> None:

@@ -200,7 +200,7 @@ const LABEL: Record<string, string> = {
   diameter_piece:       "Piece size",
 };
 
-const PLURAL: Record<string, string> = {
+export const PLURAL: Record<string, string> = {
   pawn: "Pawns", knight: "Knights", bishop: "Bishops",
   rook: "Rooks", queen: "Queens", king: "King",
 };
@@ -214,9 +214,10 @@ export interface Effect {
   good: boolean;
 }
 
+const fmt = (pct: number) => `${pct > 0 ? "+" : "\u2212"}${Math.abs(pct)}%`;
+
 /** Everything a civ changes, in reading order: general first, then per piece. */
 export function describe(civ: string): Effect[] {
-  const fmt = (pct: number) => `${pct > 0 ? "+" : "\u2212"}${Math.abs(pct)}%`;
   const general = Object.entries(PERCENTS[civ] ?? {}).map(([param, pct]) => ({
     what: LABEL[param] ?? param,
     amount: fmt(pct),
@@ -228,4 +229,36 @@ export function describe(civ: string): Effect[] {
     good: pct / PER_POINT[param] > 0,
   }));
   return [...general, ...perPiece];
+}
+
+/**
+ * Only the effects that single out a piece type, grouped by that type. The
+ * board marks these pieces, so the marker and the panel explaining it are read
+ * off the same table rather than two lists that can drift apart.
+ */
+export function pieceEffects(civ: string | null | undefined): Record<string, Effect[]> {
+  const out: Record<string, Effect[]> = {};
+  for (const [piece, param, pct] of PIECE_TABLE[civ ?? ""] ?? []) {
+    (out[piece] ??= []).push({
+      what: (LABEL[param] ?? param).toLowerCase(),
+      amount: fmt(pct),
+      good: pct / PER_POINT[param] > 0,
+    });
+  }
+  return out;
+}
+
+/**
+ * Whether a civ helps and/or hinders one piece type. The two are separate
+ * answers, not one verdict: a civ may hand the same piece both (nothing in
+ * the table stops it), and the board shows them as two marks rather than
+ * collapsing them into a third colour that means "look it up".
+ */
+export function pieceMarks(civ: string | null | undefined,
+                           piece: string): { up: boolean; down: boolean } {
+  const effects = pieceEffects(civ)[piece] ?? [];
+  return {
+    up: effects.some((e) => e.good),
+    down: effects.some((e) => !e.good),
+  };
 }

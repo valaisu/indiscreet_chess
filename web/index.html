@@ -22,6 +22,13 @@
         --gold: #c9a227;
         --good: #2f6b33;
         --bad: #9c3427;
+        /* The same two verdicts on wood, where the ink pair goes unreadable. */
+        --good-lit: #9ec27e;
+        --bad-lit: #dd8f78;
+        /* Civilization marks. Must match C_MARK_UP/DOWN in render.ts, which
+           draws the same two marks onto the pieces themselves. */
+        --mark-up: #e8bf3a;
+        --mark-down: #e0604a;
       }
       * { box-sizing: border-box; }
       body {
@@ -153,7 +160,8 @@
       #game { display: none; position: relative; height: 100dvh; }
       #board { width: 100%; height: 100%; display: block; touch-action: none; }
       #pregame { display: none; max-width: 46rem; margin: 0 auto;
-                 padding: 2rem 1.25rem; height: 100dvh; overflow-y: auto; }
+                 padding: 0 1.25rem 2rem; height: 100dvh; overflow-y: auto; }
+      #pregame > h1 { margin-top: 1.7rem; }
       .cards { display: grid; gap: 0.6rem; margin: 0.75rem 0;
                grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); }
       .card {
@@ -163,9 +171,12 @@
       }
       .card.pick { cursor: pointer; }
       .card.pick:hover { border-color: var(--gold); background: var(--parchment-warm); }
+      /* inset draws the thick edge inside the border box, so a card does not
+         change size when it becomes the pick and the grid never reflows. */
       .card.on {
         border-color: var(--gold); background: var(--parchment-warm);
-        box-shadow: 0 0 0 2px rgba(201,162,39,0.55), 0 1px 3px rgba(0,0,0,0.35);
+        box-shadow: inset 0 0 0 3px var(--gold),
+                    0 0 0 3px rgba(201,162,39,0.5), 0 1px 3px rgba(0,0,0,0.35);
       }
       .card .head { display: flex; align-items: center; gap: 0.55rem; margin-bottom: 0.5rem; }
       .civ-icon { width: 2rem; height: 2rem; flex: none; color: #6b4a22; }
@@ -193,6 +204,34 @@
       .seats { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
       .seats button { flex: none; padding: 0.4rem 0.9rem; font-size: 0.85rem; }
       .seats button.on { background: #7a5220; border-color: var(--gold); color: #fdf3dc; }
+      #pg-ready {
+        position: sticky; top: 0; z-index: 5;
+        display: grid; gap: 0.5rem; padding: 0.7rem 0;
+        background: var(--wood-dark);
+        border-bottom: 1px solid var(--wood-line);
+        grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+      }
+      .rr {
+        display: flex; align-items: center; gap: 0.6rem;
+        border: 2px solid var(--wood-line); border-radius: 6px;
+        padding: 0.55rem 0.8rem; font-size: 0.9rem;
+        background: var(--wood); color: var(--text);
+        font-family: inherit; text-align: left;
+      }
+      button.rr { cursor: pointer; }
+      button.rr:disabled { cursor: default; }
+      .rr .who { color: var(--muted); }
+      .rr .st { margin-left: auto; font-weight: 600; }
+      /* Three states: settled, still deciding, nobody there. The button keeps
+         its colour once pressed - that is the whole confirmation it gives. */
+      .rr.yes { border-color: var(--good-lit); background: #2c3a24; }
+      .rr.yes .st { color: var(--good-lit); }
+      .rr.no { border-color: var(--gold); }
+      .rr.no .st { color: var(--gold); }
+      button.rr.no:hover { background: #3d2c1c; }
+      .rr.empty { opacity: 0.65; }
+      .rr.empty .st { color: var(--muted); }
+
       #pg-status { min-height: 1.5rem; font-size: 0.9rem; color: var(--muted); }
       #pg-buttons { display: flex; gap: 0.6rem; }
 
@@ -211,6 +250,26 @@
         position: absolute; top: 0.75rem; right: 0.75rem; display: flex; gap: 0.4rem;
       }
       #game-bar button { padding: 0.4rem 0.7rem; font-size: 0.8rem; }
+      #civ-legend {
+        display: none; position: absolute; right: 0.75rem; bottom: 0.75rem;
+        background: rgba(36,26,18,0.86); border: 1px solid var(--wood-line);
+        border-radius: 6px; padding: 0.45rem 0.6rem; font-size: 0.72rem;
+        max-width: min(15rem, 45vw); pointer-events: none;
+      }
+      .lg-side { color: var(--muted); }
+      .lg-side + .lg-side { margin-top: 0.4rem; }
+      .lg-side b { color: var(--text); font-weight: 600; }
+      .lg-eff { display: flex; align-items: baseline; gap: 0.3rem; }
+      /* The board marks these pieces gold across the top and red across the
+         bottom; the arrows point the same two ways so the panel is read as the
+         key to the board rather than a second thing to learn. */
+      .lg-eff::before { font-size: 0.85em; line-height: 1; }
+      .lg-eff.good::before { content: "\25B2"; color: var(--mark-up); }
+      .lg-eff.bad::before { content: "\25BC"; color: var(--mark-down); }
+      .lg-eff .amt { margin-left: auto; font-variant-numeric: tabular-nums; }
+      .lg-eff.good .amt { color: var(--mark-up); }
+      .lg-eff.bad .amt { color: var(--mark-down); }
+
       #postgame {
         display: none; position: absolute; left: 50%; bottom: 12%;
         transform: translateX(-50%); text-align: center;
@@ -319,7 +378,7 @@
           <div class="row join">
             <button id="btn-join">Join</button>
             <input id="room-code" maxlength="4" spellcheck="false"
-                   placeholder="Code" aria-label="Room code"
+                   placeholder="ABCD" aria-label="Room code"
                    style="text-transform: uppercase" />
           </div>
           <div id="status"></div>
@@ -367,7 +426,7 @@
         </section>
 
         <section class="panel">
-          <h2>Every parameter</h2>
+          <h2>Movement parameters</h2>
           <p class="note">
             The tempo presets set these. Editing one switches the tempo to
             Custom, and a custom room is never rated.
@@ -645,6 +704,13 @@
         Pick a civilization. Your opponent cannot see your choice until the
         game begins.
       </p>
+      <!-- Sticky, because the game waits on both seats and the cards below are
+           a long scroll. Your own half is the button itself: pressing it is
+           what changes it, so the control and the state are one thing. -->
+      <div id="pg-ready">
+        <button class="rr" id="rr-me"><span class="who"></span><span class="st"></span></button>
+        <div class="rr" id="rr-them"><span class="who"></span><span class="st"></span></div>
+      </div>
       <div id="pg-seats" class="seats" style="display: none">
         <span class="note">Choosing for</span>
         <button id="seat-white" class="on">White</button>
@@ -652,7 +718,6 @@
       </div>
       <div id="civ-cards" class="cards"></div>
       <div id="pg-buttons">
-        <button id="btn-ready" class="primary">Ready</button>
         <button id="btn-pg-exit">Exit to lobby</button>
       </div>
       <div id="pg-status"></div>
@@ -662,6 +727,9 @@
       <canvas id="board"></canvas>
       <div id="banner"></div>
       <button id="btn-precise" title="Any drag distance counts as a move">Precise</button>
+      <!-- Bottom right: the free corner. Precise has the top left, resign and
+           exit the top right, and the canvas draws the ping bottom left. -->
+      <div id="civ-legend"></div>
       <div id="game-bar">
         <button id="btn-resign" class="danger">Resign</button>
         <button id="btn-exit">Exit to lobby</button>
@@ -669,7 +737,8 @@
       <div id="postgame">
         <div id="pg-result"></div>
         <div class="row">
-          <button id="btn-replay" class="primary">Watch replay</button>
+          <button id="btn-rematch" class="primary">Rematch</button>
+          <button id="btn-replay">Watch replay</button>
           <button id="btn-newgame">Exit to lobby</button>
         </div>
       </div>

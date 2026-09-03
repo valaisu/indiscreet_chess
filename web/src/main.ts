@@ -8,7 +8,7 @@ import { interpolate } from "./interp.ts";
 import { snapDestination, findPieceAt, type Piece } from "./geometry.ts";
 import * as P from "./protocol.ts";
 import { presetParams } from "./presets.ts";
-import { describe, TITLE, CIV_NAMES } from "./civs.ts";
+import { describe, pieceEffects, PLURAL, TITLE, CIV_NAMES } from "./civs.ts";
 import { CIV_ICONS } from "./civicons.ts";
 import { type GameState, forPiece } from "./protocol.ts";
 import { settings, save as saveSettings, PRECISE_MIN_DRAG, VIEW_DEFAULTS,
@@ -114,12 +114,15 @@ async function ensureConnected(): Promise<boolean> {
     const reason = m.reason ?? "server error";
     if (pregame.style.display === "block") {
       $("pg-status").textContent = reason;
-      ($("btn-ready") as HTMLButtonElement).disabled = false;
+      ($("rr-me") as HTMLButtonElement).disabled = false;
+    }
+    if (postgame.style.display === "block") {
+      $("pg-result").textContent = reason;
+      ($("btn-rematch") as HTMLButtonElement).disabled = false;
     }
     setStatus(reason, true);
   });
   net.on(P.ROOM_CREATED, (m) => {
-    ($("room-code") as HTMLInputElement).value = m.code;
     soloRoom = !!m.solo;
     inRoom = true;
     if (!m.solo) history.replaceState(null, "", `#${m.code}`);
@@ -138,20 +141,18 @@ async function ensureConnected(): Promise<boolean> {
     // whatever their own lobby fields happen to say.
     if (m.base_params) baseParams = m.base_params;
     if (!m.waiting) return;
+    if (gameEl.style.display === "block") returnToPregame(m.code);
     const me = net.color ?? "white";
     const them = me === "white" ? "black" : "white";
     const mine = m.ready?.[me];
-    // Both halves come from the server, so pressing Ready cannot leave the
-    // screen claiming something the room does not agree with.
-    const theirs = !m.seated?.[them]
-      ? "waiting for an opponent to join"
-      : m.ready?.[them]
-        ? "your opponent is ready"
-        : "your opponent is still choosing";
-    $("pg-status").textContent =
-      `${mine ? "You are ready" : "Pick a civilization, then press Ready"}: ${theirs}.`;
-    const btn = $("btn-ready") as HTMLButtonElement;
-    btn.disabled = !!mine;
+    // Both halves come from the server, so the screen cannot claim something
+    // the room does not agree with.
+    // Solo owns both seats and readies them together, so there is one cell.
+    showReady("rr-me", soloRoom ? "Both seats" : "You", !!mine, true);
+    if (!soloRoom) {
+      showReady("rr-them", "Opponent", !!m.ready?.[them], !!m.seated?.[them]);
+    }
+    $("pg-status").textContent = "";
     for (const el of civCards.children) el.classList.toggle("pick", !mine);
   });
   net.on(P.GAME_STATE, (m: GameState) => {
@@ -161,6 +162,7 @@ async function ensureConnected(): Promise<boolean> {
     // Gate on the board, not the lobby: the pre-game screen has already hidden
     // the lobby by this point.
     if (gameEl.style.display !== "block") enterGame();
+    showCivLegend(m.civs);
     state = m;
     stateAt = performance.now();
     recording.push(m, stateAt);
@@ -271,6 +273,27 @@ const picks: Record<"white" | "black", string> = { white: "none", black: "none" 
 let activeSeat: "white" | "black" = "white";
 let baseParams: Record<string, number> | null = null;
 
+/**
+ * One cell of the ready bar. Both cells are always on screen, and the bar is
+ * sticky: a game that has not started looks identical whichever seat is the
+ * one still choosing, and the cards below it are a long scroll.
+ *
+ * Your own cell is the button. It reports the server's view of your seat, not
+ * the click, so it cannot claim a readiness the room has not recorded.
+ */
+function showReady(id: string, who: string, ready: boolean, seated: boolean): void {
+  const cell = $(id);
+  cell.className = `rr ${!seated ? "empty" : ready ? "yes" : "no"}`;
+  (cell.querySelector(".who") as HTMLElement).textContent = who;
+  (cell.querySelector(".st") as HTMLElement).textContent =
+    !seated ? "not here yet" : ready ? "\u2713 Ready" : "still choosing";
+  if (cell instanceof HTMLButtonElement) {
+    cell.disabled = ready;
+    (cell.querySelector(".who") as HTMLElement).textContent =
+      ready ? who : `${who} - press when ready`;
+  }
+}
+
 /** Build a civ card. Pickable ones select; the lobby copy is read-only. */
 function civCard(civ: string, pickable: boolean): HTMLElement {
   const card = document.createElement("div");
@@ -324,7 +347,12 @@ function showPregame(code: string): void {
   $("pg-seats").style.display = soloRoom ? "flex" : "none";
   $("pg-lede").textContent = soloRoom
     ? "You play both sides. Pick a civilization for each seat, then press Ready."
-    : "Pick a civilization. Your opponent cannot see your choice until the game begins.";
+    : "Pick a civilization, then press Ready. The game starts once both of you"
+      + " have, and your opponent cannot see your choice until it does.";
+  // Drawn before the first ROOM_STATE so the bar is never briefly absent.
+  $("rr-them").style.display = soloRoom ? "none" : "";
+  showReady("rr-me", soloRoom ? "Both seats" : "You", false, true);
+  if (!soloRoom) showReady("rr-them", "Opponent", false, false);
   if (!soloRoom) activeSeat = "white";
   refreshPicks();
 }
@@ -383,6 +411,81 @@ function readParams(): object {
   return params;
 }
 
+/**
+ * Who is playing what, and which pieces their civilization singles out. Both
+ * civs are in every snapshot: the pick is secret only until the game starts.
+ *
+ * Built from the same table the board reads for its markers, so the dot on a
+ * piece and the line naming it can never disagree.
+ */
+let legendFor = "";
+function showCivLegend(civs: Record<string, string | null> | undefined): void {
+  const key = JSON.stringify(civs ?? {});
+  if (key === legendFor) return;
+  legendFor = key;
+  const panel = $("civ-legend");
+  panel.textContent = "";
+  const mine = net.color ?? "white";
+  const order = soloRoom || !net.color
+    ? (["white", "black"] as const)
+    : ([mine, mine === "white" ? "black" : "white"] as const);
+
+  for (const seat of order) {
+    const civ = civs?.[seat] ?? null;
+    const side = document.createElement("div");
+    side.className = "lg-side";
+    const name = civ ? civ[0].toUpperCase() + civ.slice(1) : "No civilization";
+    // Built from nodes: a civ name reaching innerHTML was stored XSS once.
+    const head = document.createElement("div");
+    head.append(`${seat === "white" ? "White" : "Black"}: `);
+    const b = document.createElement("b");
+    b.textContent = civ ? `${name} \u00b7 ${TITLE[civ]}` : name;
+    head.append(b);
+    side.append(head);
+
+    for (const [piece, effects] of Object.entries(pieceEffects(civ))) {
+      for (const e of effects) {
+        const row = document.createElement("div");
+        row.className = `lg-eff ${e.good ? "good" : "bad"}`;
+        const what = document.createElement("span");
+        what.textContent = `${PLURAL[piece] ?? piece} ${e.what}`;
+        const amt = document.createElement("span");
+        amt.className = "amt";
+        amt.textContent = e.amount;
+        row.append(what, amt);
+        side.append(row);
+      }
+    }
+    panel.append(side);
+  }
+  panel.style.display = "block";
+}
+
+/**
+ * Back to the pre-game screen without leaving the room: a rematch. Everything
+ * the finished game owned has to go, or its board, its replay and its legend
+ * survive into the next one - the same list `exitToLobby` clears, minus what
+ * belongs to the room itself (the seat, the tempo, whether it is solo).
+ */
+function returnToPregame(code: string): void {
+  state = null;
+  selectedId = null;
+  dragId = null;
+  dragPos = null;
+  player = null;
+  recording = new Recording();
+  matchLogged = false;
+  stopLeftCountdown();
+  showBanner("");
+  setPrecise(preciseLatched = false);
+  postgame.style.display = "none";
+  replayBar.style.display = "none";
+  $("civ-legend").style.display = "none";
+  legendFor = "";
+  gameEl.style.display = "none";
+  showPregame(code);
+}
+
 function enterGame(): void {
   lobby.style.display = "none";
   pregame.style.display = "none";
@@ -394,6 +497,8 @@ function enterGame(): void {
   renderer = new Renderer(canvas, net.color);
   renderer.hints = hintMode();
   renderer.resize();
+  legendFor = "";
+  $("civ-legend").style.display = "none";
 }
 
 // --- input ------------------------------------------------------------------
@@ -507,6 +612,8 @@ function onPointerUp(ev: PointerEvent): void {
 function showPostgame(result: string): void {
   $("pg-result").textContent = result;
   $("btn-resign").style.display = "none";
+  // Solo rematches too: it owns both seats, so it agrees with itself.
+  ($("btn-rematch") as HTMLButtonElement).disabled = false;
   if (player) return; // a late final frame must not cover the replay
 
   postgame.style.display = "block";
@@ -711,9 +818,11 @@ function exitToLobby(): void {
 
   postgame.style.display = "none";
   replayBar.style.display = "none";
+  $("civ-legend").style.display = "none";
+  legendFor = "";
   gameBar.style.display = "flex";
   $("btn-resign").style.display = "";
-  ($("btn-ready") as HTMLButtonElement).disabled = false;
+  ($("rr-me") as HTMLButtonElement).disabled = false;
   $("pg-status").textContent = "";
   gameEl.style.display = "none";
   pregame.style.display = "none";
@@ -819,7 +928,7 @@ $("seat-black").addEventListener("click", () => {
   refreshPicks();
 });
 
-$("btn-ready").addEventListener("click", () => {
+$("rr-me").addEventListener("click", () => {
   // One message per seat. The server takes the colour only from a solo room,
   // where this client owns both; anywhere else the seat is the one it dealt.
   // Only the name of the civilization goes over the wire: the server holds the
@@ -836,7 +945,15 @@ $("btn-ready").addEventListener("click", () => {
   } else {
     ready("white");
   }
-  ($("btn-ready") as HTMLButtonElement).disabled = true;
+  // Left enabled: ROOM_STATE turns the cell green when the server agrees, and
+  // a press the server rejected has to stay pressable.
+});
+// Both players press this; the server treats the second press as a no-op
+// rather than an error, so nobody is told their rematch failed.
+$("btn-rematch").addEventListener("click", () => {
+  net.send({ type: P.REMATCH });
+  $("pg-result").textContent = "Waiting for the rematch...";
+  ($("btn-rematch") as HTMLButtonElement).disabled = true;
 });
 $("btn-pg-exit").addEventListener("click", exitToLobby);
 // Editing any field by hand means the settings are no longer a named mode.

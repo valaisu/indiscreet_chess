@@ -9,6 +9,7 @@
 
 import { canCastle, DIAMETER_PIECE, type Piece } from "./geometry.ts";
 import { type GameState, forPiece } from "./protocol.ts";
+import { pieceMarks } from "./civs.ts";
 
 const C_BG = "#241a12";
 const C_LIGHT = "#f0d9b5";
@@ -30,6 +31,12 @@ const C_TEXT = "#e9dcbe";
 const C_TIMER_PREP = "#dcb932";
 const C_TIMER_COOL = "#46a0dc";
 const C_WIN_TEXT = "#ffdc64";
+// Civilization markers: a thickened arc of the piece's own outline. Gold
+// across the top for what a civilization improves, red across the bottom for
+// what it costs. Position carries the meaning as much as colour does, so the
+// two survive being small and stay apart on a piece that has both.
+const C_MARK_UP = "#e8bf3a";
+const C_MARK_DOWN = "#e0604a";
 const C_HINT_OK = "rgba(100,210,100,0.31)";      // legal and affordable
 const C_HINT_NO_MANA = "rgba(220,140,40,0.31)";  // legal direction, too far for the mana
 const C_HINT_ILLEGAL = "rgba(180,60,60,0.31)";   // not currently legal
@@ -377,6 +384,26 @@ export class Renderer {
     ctx.textBaseline = "middle";
     ctx.fillText(ICONS[`${p.type}/${p.owner}`] ?? "?", cx, cy);
 
+    // Screen top and bottom, not the piece's own: the board flips for black,
+    // and "raised" reading as up the screen is the whole point of the mark.
+    const marks = pieceMarks(state.civs?.[p.owner], p.type);
+    if (marks.up || marks.down) {
+      const quarter = Math.PI / 4;
+      ctx.lineWidth = Math.max(2.5, r * 0.2);
+      if (marks.up) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, -Math.PI / 2 - quarter, -Math.PI / 2 + quarter);
+        ctx.strokeStyle = C_MARK_UP;
+        ctx.stroke();
+      }
+      if (marks.down) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, Math.PI / 2 - quarter, Math.PI / 2 + quarter);
+        ctx.strokeStyle = C_MARK_DOWN;
+        ctx.stroke();
+      }
+    }
+
     if (p.state === "cooldown") {
       ctx.beginPath();
       ctx.arc(cx, cy, r, 0, Math.PI * 2);
@@ -436,6 +463,15 @@ export class Renderer {
       ctx.textBaseline = "middle";
       ctx.fillText(`${color}  ${value.toFixed(1)} / ${max.toFixed(1)}`,
                    x + 6, y + this.manaH / 2);
+      // The side's civilization on its own bar: the row already says whose
+      // this is, so naming it here costs no new furniture.
+      const civ = state.civs?.[color];
+      if (civ) {
+        ctx.textAlign = "right";
+        ctx.fillText(civ[0].toUpperCase() + civ.slice(1), x + barW - 6,
+                     y + this.manaH / 2);
+        ctx.textAlign = "left";
+      }
     }
     void width;
   }

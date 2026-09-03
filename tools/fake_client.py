@@ -290,6 +290,63 @@ async def run_rejoin(url: str, grace: float) -> list[tuple[str, bool, str]]:
     return results
 
 
+async def run_rematch(url: str) -> list[tuple[str, bool, str]]:
+    """Finish a game by resigning, then play the same room again.
+
+    The second REMATCH is the interesting one: both players press the button,
+    so it lands on a room already back in the lobby and must not come back as
+    an error on the slower player's screen.
+    """
+    results = []
+    async with _connect(url) as host:
+        await host.send(json.dumps({"type": protocol.CREATE_ROOM, "params": {}}))
+        created = await _await_msg(host, {protocol.ROOM_CREATED}, 5)
+        code = created["code"]
+
+        guest = await _connect(url)
+        await guest.send(json.dumps({"type": protocol.JOIN_ROOM, "code": code}))
+        await _await_msg(guest, {protocol.ROOM_JOINED}, 5)
+        await _ready(host)
+        await _ready(guest)
+        results.append(("first game starts",
+                        await _await_msg(host, {protocol.GAME_STATE}, 8) is not None, ""))
+
+        await host.send(json.dumps({"type": protocol.RESIGN}))
+        over = None
+        for _ in range(40):
+            msg = await _await_msg(host, {protocol.GAME_STATE}, 5)
+            if msg is None or msg.get("game_over"):
+                over = msg
+                break
+        results.append(("resign ends it", over is not None and over.get("game_over"),
+                        f"winner={over.get('winner') if over else 'none'}"))
+
+        # Whoever presses first puts the room back in the lobby.
+        await host.send(json.dumps({"type": protocol.REMATCH}))
+        back = await _await_msg(guest, {protocol.ROOM_STATE}, 5)
+        results.append(("rematch reopens the room",
+                        back is not None and back.get("waiting") is True,
+                        f"waiting={back.get('waiting') if back else 'none'}"))
+        results.append(("readiness is cleared",
+                        back is not None and not any(back.get("ready", {}).values()),
+                        f"ready={back.get('ready') if back else 'none'}"))
+
+        # The second press arrives at a room that is already in the lobby.
+        await guest.send(json.dumps({"type": protocol.REMATCH}))
+        echo = await _await_msg(guest, {protocol.ROOM_STATE, protocol.ERROR}, 5)
+        results.append(("second rematch is not an error",
+                        echo is not None and echo.get("type") == protocol.ROOM_STATE,
+                        f"got={echo.get('type') if echo else 'none'}"
+                        f" {echo.get('reason', '') if echo else ''}"))
+
+        await _ready(host)
+        await _ready(guest)
+        results.append(("second game starts",
+                        await _await_msg(host, {protocol.GAME_STATE}, 8) is not None, ""))
+        await guest.close()
+    return results
+
+
 async def run_hostile(url: str) -> list[tuple[str, bool, str]]:
     results = []
 
@@ -370,6 +427,7 @@ async def amain() -> int:
     ap.add_argument("--hostile", action="store_true")
     ap.add_argument("--disconnect", action="store_true")
     ap.add_argument("--rejoin", action="store_true")
+    ap.add_argument("--rematch", action="store_true")
     ap.add_argument("--grace", type=float, default=3.0,
                     help="must match the server's --grace")
     ap.add_argument("--rooms", type=int, default=1)
@@ -409,10 +467,12 @@ async def amain() -> int:
                 failed |= not ok
                 print(f"[{'PASS' if ok else 'FAIL'}] {label}: {detail}")
 
-    if args.hostile:
-        for label, ok, detail in await run_hostile(args.url):
-            failed |= not ok
-            print(f"[{'PASS' if ok else 'FAIL'}] {label}: {detail}")
+    for enabled, runner in ((args.hostile, run_hostile),
+                            (args.rematch, run_rematch)):
+        if enabled:
+            for label, ok, detail in await runner(args.url):
+                failed |= not ok
+                print(f"[{'PASS' if ok else 'FAIL'}] {label}: {detail}")
 
     return 1 if failed else 0
 

@@ -363,3 +363,64 @@ spending.
       point in full before going down with whatever was moving.
 - [x] The Rules tab's promotion paragraph still promised "same immunity", which
       Part 19 removed.
+
+## Part 21 - Ready state and civilizations on screen [done]
+
+- [x] The pre-game screen carries a sticky bar, one cell per seat, saying
+      Ready / still choosing / not here yet. It stays on screen over the nine
+      civ cards, which are a long scroll. `ROOM_STATE` already carried `ready`
+      and `seated` for both seats: nothing new goes over the wire.
+- [x] Your own cell is the Ready button. The control and the state it changes
+      are one thing: it is gold and says "press when ready" until pressed, then
+      green and "Ready". It reports the server's view, not the click, so it
+      cannot claim a readiness the room has not recorded, and a rejected press
+      leaves it pressable.
+- [x] `#pregame` lost its top padding to `#pregame > h1`. A scroll container's
+      padding is inside the scrollport, so a sticky bar at `top: 0` stopped
+      2rem down and the cards scrolled through the gap above it.
+- [x] Solo owns both seats and readies them together, so it shows one
+      full-width cell and hides the opponent's.
+- [x] The lede says the game starts once both have pressed Ready.
+- [x] Each side's civilization is named on its own mana bar, and a bottom-right
+      panel lists both, with the piece-specific effects and their percentages.
+      Bottom right was the one free corner: Precise has the top left, resign
+      and exit the top right, the ping is drawn bottom left.
+- [x] A piece its owner's civilization singles out has a quarter of its own
+      outline thickened: gold across the top for what the civ improves, red
+      across the bottom for what it costs. Position carries the meaning as
+      much as colour, so a piece with both shows both, and the corner panel
+      uses the same two colours behind a matching arrow. Drawn in screen
+      coordinates, so "up" stays up on a board flipped for black.
+- [x] A picked civ card gets a thick inset gold edge, not only a warmer
+      background. Inset, so the card does not resize and the grid never
+      reflows when the pick moves.
+- [x] `civs.pieceMarks` and `civs.pieceEffects` feed the board and the panel
+      from one table, so a mark and the line explaining it cannot disagree.
+- [x] `--good-lit` / `--bad-lit` join the palette. The existing `--good` and
+      `--bad` are ink for parchment cards and vanish on the wood ground these
+      two new surfaces sit on.
+
+## Part 22 - Rematch, and an empty code box [done]
+
+- [x] The Join box no longer holds a code by default. `ROOM_CREATED` wrote the
+      code of the room you had just *created* into the box for joining someone
+      else's, where it outlived the room and offered a dead code every time you
+      came back to the lobby. The placeholder is "ABCD", which says the shape.
+      The URL fragment still carries the code, so share links are unaffected.
+- [x] `REMATCH` plays the same room again: same seats, same tempo, readiness
+      and civilizations cleared, back to LOBBY. Both sides then pick and press
+      Ready through the one path that starts a game, which is also the point -
+      changing civilization is most of why you want a rematch.
+- [x] It is idempotent. Both players press the button, so the second press
+      lands on a room already in the lobby; answering that with an error would
+      put a failure on the screen of whoever was slower. Only a room whose
+      other seat is empty refuses, and that refusal is shown in the postgame
+      panel where the button was pressed, with the button left pressable.
+- [x] `FINISHED_TTL` 60s -> 300s: a rematch offer that expires while you watch
+      the replay is not an offer. Finished rooms with nobody in them are now
+      reaped at once instead, so the longer TTL cannot leave husks around.
+- [x] Protocol VERSION 6 -> 7. Deployed clients holding a stale bundle will say
+      "reload" rather than fail on an unknown message.
+- [x] `tools/fake_client.py --rematch` plays a game, resigns, rematches from
+      both sides and plays the second game. The room lifecycle changed, so the
+      headless client had to change with it.
