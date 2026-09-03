@@ -1,0 +1,13 @@
+#  Served by Cloudflare Workers static assets. Vite copies public/ into dist/
+#  verbatim, so this file ships with the bundle.
+#
+#  The page is one module bundle, one inline <style> block and one canvas: it
+#  loads nothing from anywhere else and posts nothing anywhere except the game
+#  socket. Saying so costs nothing and takes the teeth out of anything that
+#  does get injected into the DOM - an injected <script src> or onerror= has
+#  nowhere to load from, and frame-src 'none' covers the short payloads that
+#  fit where a script tag does not.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss://indiscreet-chess-valaisu.fly.dev ws://localhost:8765 wss://localhost:8765; frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer

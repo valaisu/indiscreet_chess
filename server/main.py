@@ -13,14 +13,14 @@ import asyncio
 import http
 import json
 import logging
+import math
 import os
 import time
 
 import websockets
 from websockets.asyncio.server import serve
 
-from . import params, room as room_mod
-from .pieces import start_overlap_reason
+from . import civs, params, room as room_mod
 from .room import Connection, RoomManager, RUNNING
 from shared import protocol
 
@@ -29,6 +29,19 @@ log = logging.getLogger("server")
 MAX_CONN_PER_IP = 5
 MAX_MSG_PER_SEC = 40
 MAX_MESSAGE_BYTES = 4096
+MAX_CONNECTIONS = 200       # process-wide; Fly's proxy caps lower, this is the floor
+MAX_JOIN_FAILS = 10         # wrong room codes before the socket is closed
+
+
+def _refuse_constant(name: str) -> float:
+    """Reject NaN and Infinity at the parser.
+
+    Python's json accepts all three as bare literals, which no browser will
+    ever send and which nothing downstream is written to survive: NaN passes
+    every bounds check by failing every comparison, and once one reaches the
+    game state the snapshot it lands in is no longer valid JSON for anybody.
+    """
+    raise ValueError(f"non-finite number: {name}")
 
 
 class Hub:
@@ -67,7 +80,17 @@ class Hub:
         code = str(msg.get("code", "")).strip().upper()
         room = await self.rooms.join(conn, code)
         if room is None:
+            # A room code is four characters, and the reply says which of "no
+            # such room", "full" and "already started" it was - enough to sweep
+            # the space and walk into someone's private lobby. Ten wrong codes
+            # and this socket is done; another attempt costs a new handshake,
+            # and MAX_CONN_PER_IP bounds how many of those can be in flight.
+            conn.join_fails += 1
+            if conn.join_fails >= MAX_JOIN_FAILS:
+                log.warning("closing %s after %d failed joins", conn.ip, conn.join_fails)
+                asyncio.create_task(conn.ws.close(1008, "too many failed joins"))
             return
+        conn.join_fails = 0     # a code that worked; this player is not sweeping
         await conn.send({
             "type":  protocol.ROOM_JOINED,
             "code":  room.code,
@@ -94,6 +117,13 @@ class Hub:
         room.start_if_ready()
 
     async def on_rejoin(self, conn: Connection, msg: dict) -> None:
+        # Same guard the other three entry points have. Without it one socket
+        # could sit in two rooms at once: conn.room names only the second, so
+        # the first never hears about the disconnect, never starts its grace
+        # forfeit, and keeps its game loop running against nobody.
+        if conn.room is not None:
+            await conn.error("already in a room")
+            return
         code  = str(msg.get("code", "")).strip().upper()
         token = str(msg.get("token", ""))
         color = self.rooms.find_rejoin(code, token)
@@ -115,17 +145,22 @@ class Hub:
         room = conn.room
         if room is None or room.state != room_mod.LOBBY or conn.color is None:
             return
-        p = msg.get("params")
-        # A civilization is applied client-side, so this is where a piece-size
-        # modifier lands: the opening position has to be checked here too.
-        reason = params.validate_params(p) or start_overlap_reason(p)
-        if reason:
-            log.warning("rejected ready params from %s: %s", conn.ip, reason)
-            await conn.error(reason)
-            return
+        # A seat picks a civilization by name, and nothing else. Any `params`
+        # in this message is ignored: the numbers are derived from the room's
+        # tempo on the server (civs.resolve), because a client trusted to send
+        # its own cooldown will send a zero. Checking the name against the
+        # table is also what keeps it out of the opponent's DOM.
         civ = msg.get("civ")
-        if civ is not None and (not isinstance(civ, str) or len(civ) > 20):
-            await conn.error("bad civ")
+        if civ is not None and civ not in civs.CIV_NAMES:
+            log.warning("rejected civ from %s: %r", conn.ip, civ)
+            await conn.error("unknown civilization")
+            return
+        # A civilization multiplies the tempo, so this is where a piece-size
+        # modifier lands: the opening position has to be checked here too.
+        _, reason = civs.resolve_checked(room.base_params, civ)
+        if reason:
+            log.warning("rejected ready from %s: %s", conn.ip, reason)
+            await conn.error(reason)
             return
         # One client holds both seats in solo, so it says which one it is
         # readying. Anywhere else the seat is the one the server assigned, and
@@ -135,7 +170,7 @@ class Hub:
             named = msg.get("color")
             seats = [named] if named in ("white", "black") else ["white", "black"]
         for seat in seats:
-            room.set_ready(seat, bool(msg.get("ready")), civ, p or {})
+            room.set_ready(seat, bool(msg.get("ready")), civ)
         await room.notify_state()
         room.start_if_ready()
 
@@ -149,6 +184,14 @@ class Hub:
         try:
             dx, dy = float(dest[0]), float(dest[1])
         except (TypeError, ValueError, IndexError):
+            await conn.error("bad destination")
+            return
+        # NaN passes every comparison a rule is written as: the distance check,
+        # the direction sector, and "can you afford it". One such move used to
+        # subtract NaN from the mana pool, after which no move ever cost
+        # anything again. Nothing downstream is written to survive it.
+        if not (math.isfinite(dx) and math.isfinite(dy)):
+            log.warning("non-finite destination from %s", conn.ip)
             await conn.error("bad destination")
             return
         rejection = room.game.queue_move(str(msg.get("piece_id", "")), (dx, dy),
@@ -206,6 +249,10 @@ class Hub:
 
     async def handle(self, ws) -> None:
         ip = client_ip(ws)
+        if len(self.conns) >= MAX_CONNECTIONS:
+            log.warning("refusing connection from %s: server full", ip)
+            await ws.close(1013, "server full")
+            return
         if self.conns_from(ip) >= MAX_CONN_PER_IP:
             log.warning("refusing connection from %s: too many", ip)
             await ws.close(1008, "too many connections")
@@ -232,7 +279,7 @@ class Hub:
                     break
 
                 try:
-                    msg = json.loads(raw)
+                    msg = json.loads(raw, parse_constant=_refuse_constant)
                 except (ValueError, TypeError):
                     await conn.error("malformed json")
                     continue
@@ -254,10 +301,21 @@ class Hub:
 
 
 def client_ip(ws) -> str:
-    """Real client address, honouring the proxy header set by Caddy/Fly."""
-    fwd = ws.request.headers.get("X-Forwarded-For") if ws.request else None
+    """Real client address, honouring the proxy header set by Caddy/Fly.
+
+    Never the first entry of X-Forwarded-For: a proxy *appends* to that header,
+    so the first entry is whatever the client itself sent, and reading it let
+    any non-browser client pick its own identity and walk past every per-IP
+    limit here. The last entry is the one our own proxy wrote. Fly-Client-IP is
+    set by Fly-Proxy and cannot be forged through it, so prefer that.
+    """
+    headers = ws.request.headers if ws.request else {}
+    fly = headers.get("Fly-Client-IP")
+    if fly:
+        return fly.strip()
+    fwd = headers.get("X-Forwarded-For")
     if fwd:
-        return fwd.split(",")[0].strip()
+        return fwd.split(",")[-1].strip()
     addr = ws.remote_address
     return addr[0] if addr else "?"
 

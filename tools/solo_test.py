@@ -1,13 +1,17 @@
 """
-Solo practice with a civilization per seat, and resignation.
+Solo practice with a civilization per seat, resignation, and tampering.
 
     python -m server.main --port 8765 &
     PYTHONPATH=. python3 tools/solo_test.py
 
-Both features are room-lifecycle changes, which is the part of this server that
+The first two are room-lifecycle changes, which is the part of this server that
 has broken quietly before: a solo client readies two seats with one socket, and
 a resignation ends a running game without a disconnect. Neither is visible from
 the pawn or visibility tests.
+
+The third is what a patched client would try. Params used to travel in
+SET_READY and were taken at face value, so a seat could deal itself a 33x mana
+refill and no cooldown while showing an ordinary civilization name.
 """
 
 import argparse
@@ -21,9 +25,14 @@ from shared import protocol
 
 DEFAULT_URL = "ws://localhost:8765"
 
-# Enough of a difference between the seats to be unmistakable in a snapshot.
-WHITE_PARAMS = {"maximum_mana": 6.0, "cooldown": 0.8}
-BLACK_PARAMS = {"maximum_mana": 4.0, "cooldown": 1.2}
+# The room's tempo, set once by whoever opens it. Not round numbers from the
+# defaults, so a snapshot showing them proves they came from here.
+TEMPO = {"maximum_mana": 6.0, "cooldown": 0.8}
+
+# What a patched client would put in SET_READY. Every value is inside LIMITS,
+# so nothing rejects it on range - it simply must not be read.
+CHEAT_PARAMS = {"maximum_mana": 50.0, "cooldown": 0.0, "mana_refill_rate": 10.0,
+                "movement_speed": 40.0, "preparation_period": 0.0}
 
 
 async def recv(ws, kind: str, tries: int = 400) -> dict:
@@ -55,20 +64,25 @@ async def test_solo_two_seats(url: str) -> None:
     """One client, both seats, a different civilization on each."""
     async with websockets.connect(url) as ws:
         await ws.send(json.dumps({"type": protocol.CREATE_ROOM, "solo": True,
-                                  "params": WHITE_PARAMS}))
+                                  "params": TEMPO}))
         created = await recv(ws, protocol.ROOM_CREATED)
         check("solo room announces itself as solo", created.get("solo") is True)
 
-        for color, params, civ in (("white", WHITE_PARAMS, "hun"),
-                                   ("black", BLACK_PARAMS, "norse")):
+        # Each seat names a civilization and, as a patched client would, a set
+        # of params to go with it. The params must be ignored entirely.
+        for color, civ in (("white", "hun"), ("black", "norse")):
             await ws.send(json.dumps({"type": protocol.SET_READY, "ready": True,
-                                      "color": color, "civ": civ, "params": params}))
+                                      "color": color, "civ": civ,
+                                      "params": CHEAT_PARAMS}))
 
         state = await playing(ws)
         check("each seat kept its own civilization",
               state["civs"] == {"white": "hun", "black": "norse"}, str(state["civs"]))
-        check("and its own parameters",
-              (state["max_mana"]["white"], state["max_mana"]["black"]) == (6.0, 4.0),
+        # hun does not touch the mana pool, so white keeps the room's 6.0.
+        # norse is -8% on it: 6.0 * 0.92 = 5.52. Both come from the tempo and
+        # the table, and neither is the 50.0 the client asked for.
+        check("the server resolved each seat's params from the tempo and the civ",
+              (state["max_mana"]["white"], state["max_mana"]["black"]) == (6.0, 5.52),
               str(state["max_mana"]))
 
         # The point of solo: moving a black piece from the seat dealt white.
@@ -103,7 +117,7 @@ async def test_solo_leave_ends_room(url: str) -> None:
         await recv(ws, protocol.ROOM_CREATED)
         for color in ("white", "black"):
             await ws.send(json.dumps({"type": protocol.SET_READY, "ready": True,
-                                      "color": color, "civ": None, "params": {}}))
+                                      "color": color, "civ": None}))
         await playing(ws)
 
         await ws.send(json.dumps({"type": protocol.LEAVE_ROOM}))
@@ -133,7 +147,7 @@ async def test_resign(url: str) -> None:
 
         for ws in (white, black):
             await ws.send(json.dumps({"type": protocol.SET_READY, "ready": True,
-                                      "civ": None, "params": {}}))
+                                      "civ": None}))
         state = await playing(white)
         check("the room started despite the early resign",
               state["game_over"] is False)
@@ -150,6 +164,73 @@ async def test_resign(url: str) -> None:
                 raise AssertionError(f"{name} never saw the game end")
 
 
+async def test_tampering(url: str) -> None:
+    """Hostile input from a seat that is legitimately in a running game. Each
+    of these once got through."""
+    async with websockets.connect(url) as ws:
+        await ws.send(json.dumps({"type": protocol.CREATE_ROOM, "solo": True,
+                                  "params": {}}))
+        await recv(ws, protocol.ROOM_CREATED)
+
+        # A civilization name is what the opponent's browser ends up rendering,
+        # so it has to be a name from the table and not a string of markup.
+        await ws.send(json.dumps({"type": protocol.SET_READY, "ready": True,
+                                  "color": "white", "civ": "<img src=x onerror=1>"}))
+        err = await recv(ws, protocol.ERROR)
+        check("an invented civilization is rejected",
+              err["reason"] == "unknown civilization", err["reason"])
+
+        for color in ("white", "black"):
+            await ws.send(json.dumps({"type": protocol.SET_READY, "ready": True,
+                                      "color": color, "civ": None}))
+        state = await playing(ws)
+        rook = next(p for p in state["pieces"]
+                    if p["id"] == "w_rook_0" and p["owner"] == "white")
+
+        # NaN is not JSON, but Python's parser accepts it, and it passes every
+        # rule check by failing every comparison. It used to poison the mana
+        # pool: after one of these no move ever cost anything again, and the
+        # snapshot the server sent afterwards was invalid JSON for both
+        # players' browsers.
+        await ws.send(json.dumps({"type": protocol.QUEUE_MOVE,
+                                  "piece_id": rook["id"],
+                                  "destination": [float("nan"), 0.0]}))
+        err = await recv(ws, protocol.ERROR)
+        check("a NaN destination is refused at the parser",
+              err["reason"] == "malformed json", err["reason"])
+
+        # Off the board: nothing out there stops a piece, so a king parked
+        # there is somewhere the opponent cannot see or click.
+        await ws.send(json.dumps({"type": protocol.QUEUE_MOVE,
+                                  "piece_id": rook["id"],
+                                  "destination": [-3.0, rook["y"]]}))
+        rej = await recv(ws, protocol.MOVE_REJECTED)
+        check("a destination off the board is rejected",
+              rej["reason"] == "destination is off the board", rej["reason"])
+
+        # Overhanging the edge is still legal: only the centerpoint has to land
+        # on the board.
+        await ws.send(json.dumps({"type": protocol.QUEUE_MOVE,
+                                  "piece_id": rook["id"],
+                                  "destination": [0.05, rook["y"]]}))
+        moved = False
+        for _ in range(120):
+            msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+            if msg.get("type") == protocol.MOVE_REJECTED:
+                raise AssertionError(f"edge move rejected: {msg.get('reason')}")
+            if msg.get("type") == protocol.GAME_STATE:
+                now = next(p for p in msg["pieces"] if p["id"] == rook["id"])
+                if now["state"] != "idle":
+                    moved = True
+                    break
+        check("a piece may still overhang the edge", moved)
+
+        # And the mana pool is still a number after all of that.
+        state = await recv(ws, protocol.GAME_STATE)
+        mana = state["mana"]["white"]
+        check("mana survived as a real number", mana == mana and mana < 1e6, str(mana))
+
+
 async def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--url", default=DEFAULT_URL)
@@ -159,10 +240,11 @@ async def main() -> None:
         await test_solo_two_seats(args.url)
         await test_solo_leave_ends_room(args.url)
         await test_resign(args.url)
+        await test_tampering(args.url)
     except AssertionError as err:
         print(f"FAIL: {err}", file=sys.stderr)
         raise SystemExit(1)
-    print("PASS: solo seats and resignation")
+    print("PASS: solo seats, resignation and tampering")
 
 
 if __name__ == "__main__":

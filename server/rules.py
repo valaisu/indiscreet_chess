@@ -30,6 +30,15 @@ def validate_move(piece: Piece, dest_x: float, dest_y: float,
     if math.hypot(dx, dy) < 1e-6:
         return "zero-distance move"
 
+    # The centerpoint has to land on the board. Overhanging the edge is fine -
+    # that is the same hitbox every piece has - but a piece sent past it has no
+    # rule stopping it: nothing else is out there, so it parks where the
+    # renderer does not draw and the opponent cannot click. The client already
+    # clamps to this rectangle (boardMax in geometry.ts), so an honest move
+    # never reaches here.
+    if not (0.0 <= dest_x <= params.BOARD_SIZE and 0.0 <= dest_y <= params.BOARD_SIZE):
+        return "destination is off the board"
+
     match piece.type:
         case PieceType.ROOK:
             if not _in_sector(dx, dy, _ORTHO, freedom_deg):

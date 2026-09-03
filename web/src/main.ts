@@ -8,7 +8,7 @@ import { interpolate } from "./interp.ts";
 import { snapDestination, findPieceAt, type Piece } from "./geometry.ts";
 import * as P from "./protocol.ts";
 import { presetParams } from "./presets.ts";
-import { withCiv, piecePayload, describe, TITLE, CIV_NAMES } from "./civs.ts";
+import { describe, TITLE, CIV_NAMES } from "./civs.ts";
 import { CIV_ICONS } from "./civicons.ts";
 import { type GameState, forPiece } from "./protocol.ts";
 import { settings, save as saveSettings, PRECISE_MIN_DRAG, VIEW_DEFAULTS,
@@ -317,14 +317,6 @@ for (const civ of ["none", ...CIV_NAMES]) civCards.append(civCard(civ, true));
 for (const civ of CIV_NAMES) $("civ-reference").append(civCard(civ, false));
 refreshPicks();
 
-/** The params a seat will actually play with: room tempo plus its civ. */
-function readyParams(civ: string): object {
-  const base = baseParams ?? (readParams() as Record<string, number>);
-  const withMods = withCiv(base, civ);
-  const pieces = piecePayload(withMods, civ);
-  return Object.keys(pieces).length ? { ...withMods, pieces } : withMods;
-}
-
 function showPregame(code: string): void {
   lobby.style.display = "none";
   pregame.style.display = "block";
@@ -593,12 +585,24 @@ function renderProfile(): void {
       : `${civLabel(m.civs[m.seat ?? "white"])} vs ` +
         `${civLabel(m.civs[m.seat === "white" ? "black" : "white"])}`;
     const mins = Math.floor(m.seconds / 60);
-    row.innerHTML =
-      `<span class="what"><span class="result ${cls}">${outcome}</span> ` +
-      `${m.solo ? "solo" : `as ${m.seat}`}, ${sides}` +
-      `<span class="when">${m.tempo}, ` +
-      `${mins ? `${mins}m ` : ""}${m.seconds % 60}s, ` +
-      `${new Date(m.at).toLocaleString()}</span></span>`;
+    // Built as nodes, not markup. Half of this line comes from the other
+    // player by way of the server, and it was written to localStorage the
+    // moment the game ended: as innerHTML, an opponent whose civilization was
+    // named "<iframe src=...>" got to run it on this page every time the
+    // profile was opened, for good. The server only accepts real civ names
+    // now; this is the half that does not depend on that staying true.
+    const what = document.createElement("span");
+    what.className = "what";
+    const result = document.createElement("span");
+    result.className = `result ${cls}`;
+    result.textContent = outcome;
+    const when = document.createElement("span");
+    when.className = "when";
+    when.textContent =
+      `${m.tempo}, ${mins ? `${mins}m ` : ""}${m.seconds % 60}s, ` +
+      `${new Date(m.at).toLocaleString()}`;
+    what.append(result, ` ${m.solo ? "solo" : `as ${m.seat}`}, ${sides}`, when);
+    row.append(what);
     const rec = recordings.get(m.id);
     if (rec) {
       const btn = document.createElement("button");
@@ -818,10 +822,13 @@ $("seat-black").addEventListener("click", () => {
 $("btn-ready").addEventListener("click", () => {
   // One message per seat. The server takes the colour only from a solo room,
   // where this client owns both; anywhere else the seat is the one it dealt.
+  // Only the name of the civilization goes over the wire: the server holds the
+  // same table and resolves the params against the room's tempo itself, so a
+  // patched copy of this page cannot deal itself a shorter cooldown.
   const ready = (seat: "white" | "black") => {
     const civ = picks[seat];
     net.send({ type: P.SET_READY, ready: true, color: seat,
-               civ: civ === "none" ? null : civ, params: readyParams(civ) });
+               civ: civ === "none" ? null : civ });
   };
   if (soloRoom) {
     ready("white");

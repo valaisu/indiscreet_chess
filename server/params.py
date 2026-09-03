@@ -6,6 +6,7 @@ DISTANCE_COST: float = 0.2       # mana per board unit
 MOVEMENT_FREEDOM_DEG: float = 5.0
 DIAMETER_PIECE: float = 0.6      # in square units
 SQUARE_SIDE: float = 1.0
+BOARD_SIZE: float = 8.0 * SQUARE_SIDE   # x and y both run 0..BOARD_SIZE
 PREPARATION_PERIOD: float = 0.5  # seconds
 MOVEMENT_SPEED: float = 4.0      # board units per second
 COOLDOWN: float = 0.8            # seconds

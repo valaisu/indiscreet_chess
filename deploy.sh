@@ -29,6 +29,11 @@ step "typecheck"
 step "geometry parity"
 PYTHONPATH=. python3 tools/parity_test.py   # tools import `server`
 
+step "civilization parity"
+# The server resolves civilizations itself now, so there are two copies of that
+# table. A drift between them is a game played on numbers nobody chose.
+PYTHONPATH=. python3 tools/civ_parity.py
+
 step "pawn rules"
 PYTHONPATH=. python3 tools/pawn_test.py
 

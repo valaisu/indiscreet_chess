@@ -8,11 +8,10 @@ a broadcast callback, so the game loop itself is unaware that rooms exist.
 import asyncio
 import json
 import logging
-import random
 import secrets
 import time
 
-from . import params
+from . import civs, params
 from .game import GameState
 from .pieces import start_overlap_reason
 from shared import protocol
@@ -29,6 +28,15 @@ GC_INTERVAL      = 30.0
 OPPOSITE = {"white": "black", "black": "white"}
 
 
+def dump(msg: dict) -> str:
+    """Serialise one frame. allow_nan=False because NaN and Infinity are not
+    JSON: Python writes the bare tokens happily and every browser's JSON.parse
+    then throws on the frame, which does not break one value, it breaks the
+    socket for the rest of the game. Raising here turns a bad number into a
+    dropped frame and a stack trace instead."""
+    return json.dumps(msg, allow_nan=False)
+
+
 class Connection:
     """One websocket. Owns its identity and rate-limit budget."""
 
@@ -42,10 +50,18 @@ class Connection:
         # 5 instant moves then ~0.3/s, so this is generous.
         self.move_tokens: float = 10.0
         self.move_tokens_at: float = time.monotonic()
+        # Wrong room codes tried on this socket. Guessing them is how a private
+        # room gets found, and a real player mistypes a code once or twice.
+        self.join_fails: int = 0
 
     async def send(self, msg: dict) -> None:
         try:
-            await self.ws.send(json.dumps(msg))
+            data = dump(msg)
+        except ValueError:
+            log.exception("refusing to send a non-finite value to %s", self.ip)
+            return
+        try:
+            await self.ws.send(data)
         except Exception:
             pass
 
@@ -63,7 +79,7 @@ class Connection:
 
 
 class Room:
-    def __init__(self, code: str, params_white: dict, params_black: dict,
+    def __init__(self, code: str, base_params: dict,
                  public: bool = False, solo: bool = False,
                  view: dict | None = None) -> None:
         self.code = code
@@ -72,12 +88,15 @@ class Room:
         # Fixed by whoever opened the room, like the tempo: both sides play
         # under the same information rules.
         self.view: dict = params.build_view(view)
-        # Built at start, not now: each player picks a civilization in the
-        # pre-game screen, so their params are not known until both are ready.
-        self.params: dict[str, dict] = {"white": params_white, "black": params_black}
-        # The tempo the room was made with. Both players apply their own
-        # civilization on top of this, so a joiner does not bring their own.
-        self.base_params: dict = dict(params_white)
+        # The tempo the room was made with, and the only thing a client gets to
+        # choose. It is announced in ROOM_STATE, so a joiner sees what they are
+        # sitting down to before they ready up.
+        self.base_params: dict = dict(base_params)
+        # Filled in at Ready, by the server, from base_params and the seat's
+        # civilization. Never taken from a client: a seat that names its own
+        # numbers names its own physics.
+        self.params: dict[str, dict] = {"white": dict(base_params),
+                                        "black": dict(base_params)}
         self.game: GameState | None = None
         self.ready: dict[str, bool] = {"white": False, "black": False}
         self.civ: dict[str, str | None] = {"white": None, "black": None}
@@ -108,7 +127,11 @@ class Room:
         self.tokens[color] = conn.token
 
     async def broadcast(self, msg: dict) -> None:
-        data = json.dumps(msg)
+        try:
+            data = dump(msg)
+        except ValueError:
+            log.exception("room %s: refusing to broadcast a non-finite value", self.code)
+            return
         seen: set[int] = set()
         for conn in self.clients.values():
             if conn is None or id(conn) in seen:
@@ -143,13 +166,16 @@ class Room:
             "ready":   dict(self.ready),
         })
 
-    def set_ready(self, color: str, ready: bool, civ, params: dict) -> None:
+    def set_ready(self, color: str, ready: bool, civ: str | None) -> None:
         """Record one seat's choice. A solo client owns both seats and readies
-        them one at a time, so each can be a different civilization."""
+        them one at a time, so each can be a different civilization.
+
+        The params follow from the civilization; the caller has already
+        resolved and checked them (see civs.resolve_checked)."""
         self.ready[color] = ready
         self.civ[color] = civ
         if ready:
-            self.params[color] = params
+            self.params[color] = civs.resolve(self.base_params, civ)
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -254,7 +280,8 @@ class RoomManager:
 
     def _new_code(self) -> str:
         while True:
-            code = "".join(random.choices(protocol.CODE_ALPHABET, k=protocol.CODE_LENGTH))
+            code = "".join(secrets.choice(protocol.CODE_ALPHABET)
+                           for _ in range(protocol.CODE_LENGTH))
             if code not in self.rooms:
                 return code
 
@@ -269,17 +296,17 @@ class RoomManager:
             await conn.error("too many rooms from this address")
             return None
 
-        if msg.get("handicap"):
-            pw, pb = msg.get("params_white"), msg.get("params_black")
-        else:
-            pw = pb = msg.get("params")
-
-        for label, p in (("params_white", pw), ("params_black", pb)):
-            reason = params.validate_params(p) or start_overlap_reason(p)
-            if reason:
-                log.warning("rejected %s from %s: %s", label, conn.ip, reason)
-                await conn.error(reason)
-                return None
+        # One tempo per room, applied to both seats. There used to be a
+        # `handicap` branch here taking separate params for white and black:
+        # only ROOM_STATE's base_params reaches the joiner, so a room could
+        # cripple the seat you were about to sit in without ever showing you.
+        # No shipped client sent it.
+        base = msg.get("params")
+        reason = params.validate_params(base) or start_overlap_reason(base)
+        if reason:
+            log.warning("rejected params from %s: %s", conn.ip, reason)
+            await conn.error(reason)
+            return None
 
         reason = params.validate_view(msg.get("view"))
         if reason:
@@ -288,7 +315,7 @@ class RoomManager:
             return None
 
         solo = bool(msg.get("solo"))
-        room = Room(self._new_code(), pw or {}, pb or {}, public=public and not solo,
+        room = Room(self._new_code(), base or {}, public=public and not solo,
                     solo=solo, view=msg.get("view"))
         self.rooms[room.code] = room
         await room.seat(conn, "white")

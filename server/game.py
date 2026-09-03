@@ -6,6 +6,11 @@ from .pieces import Piece, PieceType, PieceState, initial_board
 from .rules import validate_move, is_forward_pawn_move
 from shared.protocol import GAME_STATE, MOVE_REJECTED, GAME_OVER
 
+# How far ahead an enemy mover's arrival time may be revealed when destinations
+# are hidden. Five ticks: enough for the client to extrapolate through a late
+# snapshot, short enough that it says nothing the eye cannot already see.
+HIDDEN_TIMER_CAP: float = 0.25
+
 
 def _build_pp(overrides: dict | None) -> dict:
     """Merge per-player overrides with global param defaults."""
@@ -457,6 +462,13 @@ class GameState:
         if hidden or (d["state"] != "idle" and not self.view["enemy_dest"]):
             d["dest_x"] = d["x"]
             d["dest_y"] = d["y"]
+            # Blanking the destination is not enough on its own. On a moving
+            # piece state_timer is the time left until it arrives, so
+            # x + vel_x * state_timer is the destination again, exactly. Clip
+            # the timer to what the client needs to keep drawing smoothly
+            # between snapshots: that much of the path is already on screen.
+            if d["state"] == "moving":
+                d["state_timer"] = round(min(d["state_timer"], HIDDEN_TIMER_CAP), 4)
         return d
 
     def to_dict(self, viewer: str | None = None) -> dict:

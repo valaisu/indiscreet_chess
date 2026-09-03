@@ -128,7 +128,7 @@ class FakeClient:
                 # Rooms wait for both seats to confirm before starting, so a
                 # bot that never readies would just sit in the pre-game screen.
                 await self.send({"type": protocol.SET_READY, "ready": True,
-                                 "civ": None, "params": {}})
+                                 "civ": None})
                 self.room_ready.set()
             elif kind == protocol.MOVE_REJECTED:
                 self.rejected += 1
@@ -190,7 +190,7 @@ async def run_pair(url: str, duration: float, index: int) -> dict:
 async def _ready(ws) -> None:
     """Confirm a seat. Rooms no longer start until both sides have."""
     await ws.send(json.dumps({"type": protocol.SET_READY, "ready": True,
-                              "civ": None, "params": {}}))
+                              "civ": None}))
 
 
 async def _await_msg(ws, kinds: set[str], timeout: float) -> dict | None:
@@ -319,6 +319,27 @@ async def run_hostile(url: str) -> list[tuple[str, bool, str]]:
         await ws.send("{not json")
         reply = await _await_msg(ws, {protocol.ERROR}, 3)
         results.append(("malformed json", reply is not None,
+                        reply.get("reason", "?") if reply else "no reply"))
+
+    # NaN and Infinity are not JSON, but Python's parser reads them happily and
+    # nothing downstream survives one: NaN passes every bounds check by failing
+    # every comparison it is made of.
+    async with _connect(url) as ws:
+        await ws.send('{"type": "CREATE_ROOM", "params": {"movement_speed": NaN}}')
+        reply = await _await_msg(ws, {protocol.ERROR}, 3)
+        results.append(("nan literal refused",
+                        reply is not None and reply.get("reason") == "malformed json",
+                        reply.get("reason", "?") if reply else "no reply"))
+
+    # A socket already seated in a room must not be able to claim a seat in
+    # another one: the room it walks out of never learns it has gone.
+    async with _connect(url) as ws:
+        await ws.send(json.dumps({"type": protocol.CREATE_ROOM, "params": {}}))
+        await _await_msg(ws, {protocol.ROOM_CREATED}, 3)
+        await ws.send(json.dumps({"type": protocol.REJOIN, "code": "ZZZZ", "token": "x"}))
+        reply = await _await_msg(ws, {protocol.ERROR}, 3)
+        results.append(("rejoin while seated",
+                        reply is not None and reply.get("reason") == "already in a room",
                         reply.get("reason", "?") if reply else "no reply"))
 
     # Flood: the server should close the socket rather than fall over. Poll for
