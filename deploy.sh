@@ -40,6 +40,15 @@ PYTHONPATH=. python3 tools/pawn_test.py
 step "hidden information"
 PYTHONPATH=. python3 tools/visibility_test.py
 
+step "rating"
+PYTHONPATH=. python3 tools/rating_test.py > /dev/null && echo "elo and the rated-game rule"
+
+step "replay fidelity"
+# Stored games are an event log, not snapshots, so the recorder and the
+# expander are two halves of one format. When they drift, a saved game replays
+# as a game nobody played and nothing on screen says so.
+PYTHONPATH=. python3 tools/replay_test.py
+
 step "civilization budget"
 node --experimental-strip-types tools/civ_table.mjs > /dev/null
 

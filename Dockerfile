@@ -8,6 +8,8 @@ RUN pip install --no-cache-dir -r requirements-server.txt
 
 COPY server/ ./server/
 COPY shared/ ./shared/
+# db.py applies these on startup; without them the schema is never created.
+COPY migrations/ ./migrations/
 
 EXPOSE 8765
 

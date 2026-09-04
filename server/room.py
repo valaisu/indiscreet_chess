@@ -11,7 +11,7 @@ import logging
 import secrets
 import time
 
-from . import civs, params
+from . import civs, db, params, presets, rating
 from .game import GameState
 from .pieces import start_overlap_reason
 from shared import protocol
@@ -53,6 +53,10 @@ class Connection:
         # Wrong room codes tried on this socket. Guessing them is how a private
         # room gets found, and a real player mistypes a code once or twice.
         self.join_fails: int = 0
+        # {"id", "name"} once signed in. The seat copies this when it sits
+        # down, so signing out mid-game cannot change who the game was between.
+        self.user: dict | None = None
+        self.auth_attempts: int = 0
 
     async def send(self, msg: dict) -> None:
         try:
@@ -101,12 +105,21 @@ class Room:
         self.ready: dict[str, bool] = {"white": False, "black": False}
         self.civ: dict[str, str | None] = {"white": None, "black": None}
         self.clients: dict[str, Connection | None] = {"white": None, "black": None}
+        # Copied from the connection when the seat is taken, not read back from
+        # it later: signing out or reloading mid-game must not change who the
+        # game was between, and a rejoining socket must not be able to claim a
+        # seat for a different account.
+        self.user: dict[str, dict | None] = {"white": None, "black": None}
         self.tokens: dict[str, str] = {}
         self.state: str = LOBBY
         self.created_at = time.monotonic()
         self.finished_at: float | None = None
         self.task: asyncio.Task | None = None
         self._grace: dict[str, asyncio.Task] = {}
+        self._save_task: asyncio.Task | None = None
+        # Set once the finished game reaches the database, so the client can be
+        # pointed at its stored replay.
+        self.game_id: str | None = None
 
     # -- membership ---------------------------------------------------------
 
@@ -124,6 +137,7 @@ class Room:
         conn.color = color
         conn.token = secrets.token_urlsafe(12)
         self.clients[color] = conn
+        self.user[color] = dict(conn.user) if conn.user else None
         self.tokens[color] = conn.token
 
     async def broadcast(self, msg: dict) -> None:
@@ -184,6 +198,7 @@ class Room:
         and it puts the room back through the one path that starts a game."""
         self.game = None
         self.task = None
+        self.game_id = None
         self.state = LOBBY
         self.finished_at = None
         self.created_at = time.monotonic()   # LOBBY_TTL starts again
@@ -221,6 +236,54 @@ class Room:
             self.state = FINISHED
             self.finished_at = time.monotonic()
             log.info("room %s over, winner=%s", self.code, self.game.winner)
+            # Storing the game is not part of finishing it. A slow or missing
+            # database must not hold up the final broadcast, the rematch
+            # button, or the room's own teardown, so this is fired and
+            # forgotten. The task holds its own reference to the recording.
+            if db.enabled() and self.game is not None:
+                self._save_task = asyncio.create_task(self._save())
+
+    async def _save(self) -> None:
+        """Store the finished game, and move the ratings if it was rated.
+        Called once, off the game loop."""
+        game = self.game
+        if game is None:
+            return
+        tempo = presets.tempo_name(self.base_params) or "custom"
+        white_id = (self.user["white"] or {}).get("id")
+        black_id = (self.user["black"] or {}).get("id")
+        reason = rating.rated_reason(self.solo, self.base_params, self.view,
+                                     white_id, black_id)
+        self.game_id = await db.save_game(
+            white_user_id=white_id,
+            black_user_id=black_id,
+            white_civ=self.civ["white"],
+            black_civ=self.civ["black"],
+            tempo=tempo,
+            winner=game.winner or "draw",
+            ticks=game.tick,
+            rated=reason is None,
+            unrated_reason=reason,
+            recording=game.recorder.to_dict(),
+            log_format=game.recorder.format,
+            civ_table=civs.table_fingerprint(),
+            solo=self.solo,
+        )
+        if not self.game_id:
+            return
+        log.info("room %s: saved game %s (%s, %d ticks, rated=%s)",
+                 self.code, self.game_id, tempo, game.tick, reason is None)
+
+        if reason is not None:
+            return
+        moved = await db.apply_rating(
+            game_id=self.game_id, white_user_id=white_id, black_user_id=black_id,
+            tempo=tempo, winner=game.winner or "draw", update_fn=rating.update)
+        if moved:
+            # Both seats are told, even the loser: a rating that changes
+            # silently is one people assume is broken.
+            await self.broadcast({"type": protocol.RATING_UPDATE,
+                                  "game_id": self.game_id, **moved})
 
     async def on_disconnect(self, conn: Connection) -> None:
         color = conn.color
@@ -339,6 +402,7 @@ class RoomManager:
         await room.seat(conn, "white")
         if solo:
             room.clients["black"] = conn
+            room.user["black"] = dict(conn.user) if conn.user else None
             room.tokens["black"] = conn.token
         log.info("room %s created by %s (public=%s)", room.code, conn.ip, public)
         return room

@@ -1,6 +1,6 @@
 // Mirrors shared/protocol.py. Keep in sync.
 // Must equal VERSION in shared/protocol.py; deploy.sh refuses to ship a mismatch.
-export const VERSION = 7;
+export const VERSION = 8;
 
 export const QUEUE_MOVE = "QUEUE_MOVE";
 export const GAME_STATE = "GAME_STATE";
@@ -17,6 +17,13 @@ export const REMATCH = "REMATCH";
 export const RESIGN = "RESIGN";
 export const PING = "PING";
 
+export const SIGN_UP = "SIGN_UP";
+export const SIGN_IN = "SIGN_IN";
+export const SIGN_OUT = "SIGN_OUT";
+export const RESUME_SESSION = "RESUME_SESSION";
+export const LIST_GAMES = "LIST_GAMES";
+export const GET_GAME = "GET_GAME";
+
 export const ROOM_CREATED = "ROOM_CREATED";
 export const ROOM_JOINED = "ROOM_JOINED";
 export const ROOM_STATE = "ROOM_STATE";
@@ -24,6 +31,34 @@ export const OPPONENT_LEFT = "OPPONENT_LEFT";
 export const OPPONENT_REJOINED = "OPPONENT_REJOINED";
 export const PONG = "PONG";
 export const SERVER_HELLO = "SERVER_HELLO";
+export const AUTH_STATE = "AUTH_STATE";
+export const AUTH_ERROR = "AUTH_ERROR";
+export const RATING_UPDATE = "RATING_UPDATE";
+export const GAME_LIST = "GAME_LIST";
+export const GAME_RECORD = "GAME_RECORD";
+
+/** One finished game as the server lists it, without its recording. */
+export interface StoredGame {
+  id: string;
+  at: number;
+  seat: string;
+  tempo: string;
+  winner: string;
+  ticks: number;
+  rated: boolean;
+  unrated_reason: string | null;
+  civs: Record<string, string | null>;
+  opponent: string | null;
+  rating: { before: number; after: number } | null;
+}
+
+/** A signed-in player, as the server describes them. */
+export interface Identity {
+  id: string;
+  name: string;
+  /** tempo -> rating and games played. A tempo absent here is unplayed. */
+  ratings: Record<string, { rating: number; games: number }>;
+}
 
 import type { Piece } from "./geometry.ts";
 

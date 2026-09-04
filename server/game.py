@@ -2,6 +2,7 @@ import asyncio
 import math
 
 from . import params, physics
+from .recorder import Recorder
 from .pieces import Piece, PieceType, PieceState, initial_board
 from .rules import validate_move, is_forward_pawn_move
 from shared.protocol import GAME_STATE, MOVE_REJECTED, GAME_OVER
@@ -69,6 +70,10 @@ class GameState:
         self.game_over: bool = False
         self.winner: str | None = None
         self._pending: list[dict] = []
+        # Every finished game is stored as an event log, so the recorder
+        # watches from the opening position onward. It is a passive observer:
+        # nothing in the game loop reads it back.
+        self.recorder = Recorder(self)
         # ghost_id → {"pawn_id": str, "window_closed": bool}
         # window_closed becomes True once the opponent's first move after the
         # pawn finishes has been checked (either targeting ghost or not).
@@ -132,6 +137,7 @@ class GameState:
         snapshot built for them (see to_dict)."""
         tick_dt = 1.0 / params.TICK_RATE
         loop = asyncio.get_event_loop()
+        self.recorder.start(params.TICK_RATE)
 
         for n in (3, 2, 1, 0):
             self.countdown = n
@@ -149,6 +155,7 @@ class GameState:
             await asyncio.sleep(max(0.0, tick_dt - elapsed))
 
         await broadcast_fn(self)
+        self.recorder.finish(self)
 
     def _tick(self, dt: float) -> None:
         self.tick += 1
@@ -200,6 +207,10 @@ class GameState:
 
         # 10. Win condition.
         self._check_win()
+
+        # 11. Write down what changed this tick. Last, so it sees the tick's
+        # finished state rather than a piece halfway through it.
+        self.recorder.observe(self, dt)
 
     # ------------------------------------------------------------------
     # Move application

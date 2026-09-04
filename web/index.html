@@ -311,7 +311,10 @@
         border-bottom: 2px solid var(--gold);
       }
       .tab { display: flex; flex-direction: column; gap: 1.1rem; }
-      .tab[hidden] { display: none; }
+      /* Any explicit `display` beats the hidden attribute, and most things
+         here are flex, so hiding one by setting el.hidden silently does
+         nothing. This has to outrank them all, hence !important. */
+      [hidden] { display: none !important; }
 
       /* Rules: prose, so it gets a reading measure and real paragraphs. */
       .rules h3 {
@@ -341,6 +344,30 @@
       .opts .check { display: flex; align-items: center; gap: 0.5rem; }
       .opts .check input { width: auto; accent-color: var(--gold); }
       .opts .check label { margin: 0; color: var(--text); font-size: 0.85rem; }
+
+      /* Account and ratings */
+      .note.warn {
+        border-left: 3px solid var(--gold);
+        padding-left: 0.7rem;
+      }
+      .ratings { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.6rem 0; }
+      .ratings .rating {
+        border: 1px solid var(--wood-line);
+        border-radius: 6px;
+        padding: 0.4rem 0.7rem;
+        min-width: 5.5rem;
+      }
+      .ratings .rating .mode {
+        display: block; font-size: 0.7rem; text-transform: uppercase;
+        letter-spacing: 0.06em; opacity: 0.7;
+      }
+      .ratings .rating .value { font-size: 1.15rem; }
+      .ratings .rating .games { font-size: 0.7rem; opacity: 0.7; }
+      .ratings .rating.unplayed .value { opacity: 0.45; }
+      .match .delta { font-variant-numeric: tabular-nums; margin-left: 0.4rem; }
+      .match .delta.up { color: var(--good-lit); }
+      .match .delta.down { color: var(--bad-lit); }
+      #pg-rating { font-size: 0.9rem; opacity: 0.85; margin-top: 0.3rem; }
     </style>
   </head>
   <body>
@@ -682,16 +709,51 @@
       </section>
 
       <section id="tab-profile" class="tab" hidden>
+        <section class="panel" id="pf-signed-out">
+          <h2>Account</h2>
+          <p class="note">
+            An account keeps your games and gives you a rating. Playing without
+            one works exactly as before, and always will.
+          </p>
+          <div class="row">
+            <input id="ac-name" maxlength="20" spellcheck="false"
+                   autocomplete="username" placeholder="Name"
+                   aria-label="Account name" />
+            <input id="ac-pass" type="password" maxlength="128"
+                   autocomplete="current-password" placeholder="Password"
+                   aria-label="Password" />
+          </div>
+          <div class="row">
+            <button id="btn-signin">Sign in</button>
+            <button id="btn-signup">Create account</button>
+          </div>
+          <div id="ac-status"></div>
+          <p class="note warn" id="ac-warning">
+            <strong>Please use a password you use nowhere else.</strong>
+            This is a hobby project. Passwords are hashed with argon2id and no
+            email address is collected, but the security here has not been
+            reviewed by anyone and comes with no guarantee. There is also no
+            password reset: if you lose it, the account is gone.
+          </p>
+        </section>
+
+        <section class="panel" id="pf-signed-in" hidden>
+          <h2>Account</h2>
+          <p class="lede" id="pf-name"></p>
+          <div id="pf-ratings" class="ratings"></div>
+          <p class="note">
+            A game is rated when both players are signed in, the tempo is
+            Bullet, Rapid or Slow, and nobody has changed what players can see.
+            Solo games and custom settings are never rated.
+          </p>
+          <button id="btn-signout">Sign out</button>
+        </section>
+
         <section class="panel">
           <h2>Match history</h2>
           <p class="note" id="pf-summary"></p>
           <div id="pf-list"></div>
-          <p class="note">
-            Results are kept in this browser. A replay is the snapshots the
-            server sent, held in memory, so it lasts as long as this tab stays
-            open: reloading keeps the result and loses the recording. Nothing
-            is stored on the server, and there are no accounts yet.
-          </p>
+          <p class="note" id="pf-storage-note"></p>
           <button id="btn-clear-history">Clear history</button>
         </section>
       </section>
@@ -736,6 +798,7 @@
       </div>
       <div id="postgame">
         <div id="pg-result"></div>
+        <div id="pg-rating"></div>
         <div class="row">
           <button id="btn-rematch" class="primary">Rematch</button>
           <button id="btn-replay">Watch replay</button>

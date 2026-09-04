@@ -5,12 +5,14 @@ is how the room layer gets verified.
     python -m tools.fake_client --pair              # two clients, one game
     python -m tools.fake_client --pair --rooms 3    # concurrent rooms
     python -m tools.fake_client --hostile           # abuse checks
+    python -m tools.fake_client --accounts          # sign in, rated game
 """
 
 import argparse
 import asyncio
 import json
 import random
+import secrets
 import sys
 
 import websockets
@@ -347,6 +349,109 @@ async def run_rematch(url: str) -> list[tuple[str, bool, str]]:
     return results
 
 
+async def run_accounts(url: str) -> list[tuple[str, bool, str]]:
+    """Two signed-in players finish a rated game and both ratings move.
+
+    The only test that covers the whole chain at once: sign-up, the identity
+    riding on the seat, the standard tempo making the game ratable, the save
+    off the game loop, and the RATING_UPDATE that follows it. Requires the
+    server to have a database; without one it reports that and passes nothing.
+    """
+    results = []
+    tag = secrets.token_hex(3)
+    rapid = {"mana_refill_rate": 0.15, "maximum_mana": 5.0, "base_move_cost": 1.0,
+             "distance_cost": 0.2, "preparation_period": 0.5, "cooldown": 1.3,
+             "movement_speed": 2.0, "movement_freedom_deg": 5.0,
+             "diameter_piece": 0.6}
+
+    async def sign_up(ws, name):
+        await ws.send(json.dumps({"type": protocol.SIGN_UP, "name": name,
+                                  "password": "a test password"}))
+        return await _await_msg(ws, {protocol.AUTH_STATE, protocol.AUTH_ERROR}, 10)
+
+    async with _connect(url) as host:
+        who = await sign_up(host, f"t{tag}w")
+        if who is None or who.get("type") == protocol.AUTH_ERROR:
+            reason = (who or {}).get("reason", "no reply")
+            results.append(("accounts available", False, reason))
+            return results
+        results.append(("host signs up", who["user"]["name"] == f"t{tag}w",
+                        who["user"]["name"]))
+        results.append(("no ratings before playing", who["user"]["ratings"] == {},
+                        str(who["user"]["ratings"])))
+
+        guest = await _connect(url)
+        g = await sign_up(guest, f"t{tag}b")
+        results.append(("guest signs up", g.get("type") == protocol.AUTH_STATE, ""))
+
+        # A preset tempo, both signed in, not solo: this one is ratable.
+        await host.send(json.dumps({"type": protocol.CREATE_ROOM, "params": rapid}))
+        created = await _await_msg(host, {protocol.ROOM_CREATED}, 5)
+        await guest.send(json.dumps({"type": protocol.JOIN_ROOM,
+                                     "code": created["code"]}))
+        await _await_msg(guest, {protocol.ROOM_JOINED}, 5)
+        await _ready(host)
+        await _ready(guest)
+        results.append(("rated game starts",
+                        await _await_msg(host, {protocol.GAME_STATE}, 10) is not None, ""))
+
+        await guest.send(json.dumps({"type": protocol.RESIGN}))
+        moved = await _await_msg(host, {protocol.RATING_UPDATE}, 20)
+        if moved is None:
+            results.append(("rating update arrives", False, "no RATING_UPDATE"))
+            await guest.close()
+            return results
+
+        results.append(("rating update arrives", True, moved["tempo"]))
+        results.append(("winner gains",
+                        moved["white"]["after"] > moved["white"]["before"],
+                        f'{moved["white"]["before"]} -> {moved["white"]["after"]}'))
+        results.append(("loser drops",
+                        moved["black"]["after"] < moved["black"]["before"],
+                        f'{moved["black"]["before"]} -> {moved["black"]["after"]}'))
+        results.append(("both seats are told",
+                        await _await_msg(guest, {protocol.RATING_UPDATE}, 5) is not None,
+                        ""))
+        results.append(("rated at the standard tempo", moved["tempo"] == "rapid",
+                        moved["tempo"]))
+        await guest.close()
+    return results
+
+
+async def run_unrated(url: str) -> list[tuple[str, bool, str]]:
+    """A custom tempo must not move a rating, however signed in both sides are."""
+    results = []
+    tag = secrets.token_hex(3)
+    async with _connect(url) as host:
+        await host.send(json.dumps({"type": protocol.SIGN_UP, "name": f"u{tag}w",
+                                    "password": "a test password"}))
+        who = await _await_msg(host, {protocol.AUTH_STATE, protocol.AUTH_ERROR}, 10)
+        if who is None or who.get("type") == protocol.AUTH_ERROR:
+            results.append(("accounts available", False,
+                            (who or {}).get("reason", "no reply")))
+            return results
+        guest = await _connect(url)
+        await guest.send(json.dumps({"type": protocol.SIGN_UP, "name": f"u{tag}b",
+                                     "password": "a test password"}))
+        await _await_msg(guest, {protocol.AUTH_STATE}, 10)
+
+        # Default params are not one of the three presets.
+        await host.send(json.dumps({"type": protocol.CREATE_ROOM, "params": {}}))
+        created = await _await_msg(host, {protocol.ROOM_CREATED}, 5)
+        await guest.send(json.dumps({"type": protocol.JOIN_ROOM,
+                                     "code": created["code"]}))
+        await _await_msg(guest, {protocol.ROOM_JOINED}, 5)
+        await _ready(host)
+        await _ready(guest)
+        await _await_msg(host, {protocol.GAME_STATE}, 10)
+        await guest.send(json.dumps({"type": protocol.RESIGN}))
+        late = await _await_msg(host, {protocol.RATING_UPDATE}, 6)
+        results.append(("a custom tempo moves no rating", late is None,
+                        "none arrived" if late is None else "RATING_UPDATE sent"))
+        await guest.close()
+    return results
+
+
 async def run_hostile(url: str) -> list[tuple[str, bool, str]]:
     results = []
 
@@ -428,6 +533,9 @@ async def amain() -> int:
     ap.add_argument("--disconnect", action="store_true")
     ap.add_argument("--rejoin", action="store_true")
     ap.add_argument("--rematch", action="store_true")
+    ap.add_argument("--accounts", action="store_true",
+                    help="sign-up, a rated game, and the rating that follows; "
+                         "needs a server with a database")
     ap.add_argument("--grace", type=float, default=3.0,
                     help="must match the server's --grace")
     ap.add_argument("--rooms", type=int, default=1)
@@ -468,7 +576,9 @@ async def amain() -> int:
                 print(f"[{'PASS' if ok else 'FAIL'}] {label}: {detail}")
 
     for enabled, runner in ((args.hostile, run_hostile),
-                            (args.rematch, run_rematch)):
+                            (args.rematch, run_rematch),
+                            (args.accounts, run_accounts),
+                            (args.accounts, run_unrated)):
         if enabled:
             for label, ok, detail in await runner(args.url):
                 failed |= not ok

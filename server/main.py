@@ -15,12 +15,14 @@ import json
 import logging
 import math
 import os
+import re
 import time
+from pathlib import Path
 
 import websockets
 from websockets.asyncio.server import serve
 
-from . import civs, params, room as room_mod
+from . import accounts, civs, db, params, recorder, room as room_mod
 from .room import Connection, RoomManager, FINISHED, RUNNING
 from shared import protocol
 
@@ -31,6 +33,11 @@ MAX_MSG_PER_SEC = 40
 MAX_MESSAGE_BYTES = 4096
 MAX_CONNECTIONS = 200       # process-wide; Fly's proxy caps lower, this is the floor
 MAX_JOIN_FAILS = 10         # wrong room codes before the socket is closed
+
+# Game ids are uuids. Checking the shape before the query keeps a malformed id
+# from reaching Postgres as a cast error rather than a miss.
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+                      r"[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
 
 def _refuse_constant(name: str) -> float:
@@ -48,6 +55,10 @@ class Hub:
     def __init__(self) -> None:
         self.rooms = RoomManager()
         self.conns: set[Connection] = set()
+        # Sign-in attempts per address. Per-connection counting alone is not a
+        # limit: MAX_CONN_PER_IP sockets each get a fresh budget, and a new
+        # handshake is cheap.
+        self.attempts = accounts.Attempts()
 
     def conns_from(self, ip: str) -> int:
         return sum(1 for c in self.conns if c.ip == ip)
@@ -174,6 +185,101 @@ class Hub:
         await room.notify_state()
         room.start_if_ready()
 
+    # -- accounts -----------------------------------------------------------
+
+    async def _auth_guard(self, conn: Connection) -> str | None:
+        """Why this socket may not try to sign in right now, or None."""
+        if not db.enabled():
+            return "accounts are not available on this server"
+        conn.auth_attempts += 1
+        if conn.auth_attempts > accounts.MAX_ATTEMPTS_PER_CONN:
+            return "too many attempts; reconnect and try again"
+        if not self.attempts.allow(conn.ip):
+            log.warning("auth rate limit hit from %s", conn.ip)
+            return "too many attempts from this address; try again later"
+        return None
+
+    async def _send_auth(self, conn: Connection, identity: dict | None) -> None:
+        conn.user = None if identity is None else {"id": identity["id"],
+                                                   "name": identity["name"]}
+        await conn.send({"type": protocol.AUTH_STATE, "user": identity})
+
+    async def on_sign_up(self, conn: Connection, msg: dict) -> None:
+        blocked = await self._auth_guard(conn)
+        if blocked:
+            await conn.send({"type": protocol.AUTH_ERROR, "reason": blocked})
+            return
+        identity, reason = await accounts.sign_up(msg.get("name"),
+                                                  msg.get("password"))
+        if reason:
+            await conn.send({"type": protocol.AUTH_ERROR, "reason": reason})
+            return
+        log.info("new account %r from %s", identity["name"], conn.ip)
+        await self._send_auth(conn, identity)
+
+    async def on_sign_in(self, conn: Connection, msg: dict) -> None:
+        blocked = await self._auth_guard(conn)
+        if blocked:
+            await conn.send({"type": protocol.AUTH_ERROR, "reason": blocked})
+            return
+        identity, reason = await accounts.sign_in(msg.get("name"),
+                                                  msg.get("password"))
+        if reason:
+            await conn.send({"type": protocol.AUTH_ERROR, "reason": reason})
+            return
+        await self._send_auth(conn, identity)
+
+    async def on_resume_session(self, conn: Connection, msg: dict) -> None:
+        """A stored token from a previous visit. Not rate limited: the token is
+        32 random bytes, so there is nothing here worth guessing at, and a
+        reload must not spend the sign-in budget."""
+        if not db.enabled():
+            await self._send_auth(conn, None)
+            return
+        await self._send_auth(conn, await accounts.resume(msg.get("token", "")))
+
+    async def on_sign_out(self, conn: Connection, msg: dict) -> None:
+        await accounts.sign_out(msg.get("token", ""))
+        await self._send_auth(conn, None)
+
+    # -- stored games -------------------------------------------------------
+
+    async def on_list_games(self, conn: Connection, msg: dict) -> None:
+        if conn.user is None:
+            await conn.send({"type": protocol.GAME_LIST, "games": []})
+            return
+        games = await db.recent_games(conn.user["id"])
+        await conn.send({"type": protocol.GAME_LIST, "games": games})
+
+    async def on_get_game(self, conn: Connection, msg: dict) -> None:
+        """One stored game with its recording, for replay.
+
+        Signing in is required, and the game must be one this account played.
+        The stored log is the whole truth - both sides' hidden preparation and
+        destinations - so handing it to anyone with an id would give away
+        exactly what the room's visibility settings existed to conceal. For a
+        finished game of your own that is fine; for anyone else's it is not.
+        """
+        if conn.user is None:
+            await conn.error("sign in to watch a stored game")
+            return
+        game_id = str(msg.get("id", ""))
+        if not _UUID_RE.match(game_id):
+            await conn.error("no such game")
+            return
+        record = await db.get_game(game_id)
+        if record is None or conn.user["id"] not in record["players"]:
+            # One message for "no such game" and "not yours": otherwise this is
+            # an oracle for which ids exist.
+            await conn.error("no such game")
+            return
+        if record["log_format"] != recorder.FORMAT:
+            await conn.error("this recording was made by an older version "
+                             "and can no longer be replayed")
+            return
+        await conn.send({"type": protocol.GAME_RECORD, "id": record["id"],
+                         "recording": record["recording"]})
+
     async def on_queue_move(self, conn: Connection, msg: dict) -> None:
         room = conn.room
         if room is None or room.state != RUNNING:
@@ -260,6 +366,18 @@ class Hub:
             await self.on_leave(conn, msg)
         elif kind == protocol.REMATCH:
             await self.on_rematch(conn, msg)
+        elif kind == protocol.SIGN_UP:
+            await self.on_sign_up(conn, msg)
+        elif kind == protocol.SIGN_IN:
+            await self.on_sign_in(conn, msg)
+        elif kind == protocol.SIGN_OUT:
+            await self.on_sign_out(conn, msg)
+        elif kind == protocol.RESUME_SESSION:
+            await self.on_resume_session(conn, msg)
+        elif kind == protocol.LIST_GAMES:
+            await self.on_list_games(conn, msg)
+        elif kind == protocol.GET_GAME:
+            await self.on_get_game(conn, msg)
         elif kind == protocol.PING:
             await conn.send({"type": protocol.PONG, "t": msg.get("t"),
                              "server_time": time.time()})
@@ -370,6 +488,11 @@ async def main() -> None:
     MAX_CONN_PER_IP = args.max_conn_per_ip
     room_mod.DISCONNECT_GRACE = args.grace
 
+    # Local runs read .env; in production these are Fly secrets and are
+    # already in the environment, where setdefault leaves them alone.
+    db.load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+    await db.connect(os.environ.get("DATABASE_URL"))
+
     hub = Hub()
 
     def process_request(connection, request):
@@ -387,13 +510,16 @@ async def main() -> None:
     else:
         log.warning("no --origin set: accepting connections from any origin")
 
-    async with serve(hub.handle, args.host, args.port,
-                     process_request=process_request,
-                     origins=origins,
-                     close_timeout=5,
-                     max_size=MAX_MESSAGE_BYTES):
-        log.info("listening on %s:%d", args.host, args.port)
-        await hub.rooms.gc_loop()
+    try:
+        async with serve(hub.handle, args.host, args.port,
+                         process_request=process_request,
+                         origins=origins,
+                         close_timeout=5,
+                         max_size=MAX_MESSAGE_BYTES):
+            log.info("listening on %s:%d", args.host, args.port)
+            await hub.rooms.gc_loop()
+    finally:
+        await db.close()
 
 
 if __name__ == "__main__":

@@ -14,6 +14,9 @@ import { type GameState, forPiece } from "./protocol.ts";
 import { settings, save as saveSettings, PRECISE_MIN_DRAG, VIEW_DEFAULTS,
          type View } from "./settings.ts";
 import { Recording, Player, SPEEDS } from "./replay.ts";
+import * as account from "./account.ts";
+import { expand, ExpandError } from "./expand.ts";
+import type { StoredGame } from "./protocol.ts";
 
 const CLICK_R_SELECT = 0.5; // forgiving radius when nothing is selected
 const CLICK_R_SWITCH = 0.3; // strict radius once a piece is selected
@@ -84,6 +87,11 @@ interface Match {
 const HISTORY_KEY = "matches";
 const MAX_HISTORY = 50;
 const recordings = new Map<string, Recording>();
+/** Finished games the server holds for this account. Empty when signed out. */
+let storedGames: StoredGame[] = [];
+/** Rating movement from the game just finished, shown on the post-game card. */
+let lastRating: { tempo: string; white: Rated; black: Rated } | null = null;
+interface Rated { before: number; after: number }
 
 function setStatus(text: string, isError = false): void {
   if (stale) return; // a version warning outranks routine lobby chatter
@@ -172,6 +180,65 @@ async function ensureConnected(): Promise<boolean> {
       showPostgame(m.winner === "draw" ? "Draw" : `${m.winner} wins`);
     }
   });
+  net.on(P.AUTH_STATE, (m) => {
+    account.applyAuthState(m);
+    setAuthBusy(false);
+    $("ac-status").textContent = "";
+    $("ac-status").classList.remove("error");
+    // Never leave a password sitting in a field across a screen change.
+    ($("ac-pass") as HTMLInputElement).value = "";
+    if (account.identity) ($("ac-name") as HTMLInputElement).value = "";
+    // Signing in or out changes which history is the real one, so the list is
+    // re-fetched rather than filtered: the server's copy and the local one are
+    // different sets, not the same set seen two ways.
+    storedGames = [];
+    if (account.identity) net.send({ type: P.LIST_GAMES });
+    renderAccount();
+    renderProfile();
+  });
+  net.on(P.AUTH_ERROR, (m) => {
+    // On the account form, not the lobby status line: that line is a tab away
+    // from where the button was pressed.
+    $("ac-status").textContent = m.reason ?? "sign in failed";
+    $("ac-status").classList.add("error");
+    setAuthBusy(false);
+  });
+  net.on(P.GAME_LIST, (m) => {
+    storedGames = m.games ?? [];
+    renderProfile();
+  });
+  net.on(P.GAME_RECORD, (m) => {
+    try {
+      const rec = new Recording();
+      // The stored log expands into the same frames the server broadcast, so
+      // everything downstream - the player, the renderer, the seek bar - is
+      // the code that already exists.
+      for (const [i, frame] of expand(m.recording).entries()) {
+        rec.push(frame, i * (1000 / (m.recording.header?.tick_rate ?? 20)));
+      }
+      const game = storedGames.find((g) => g.id === m.id);
+      watchReplay(rec, game?.seat ?? null, "profile");
+    } catch (err) {
+      $("pf-summary").textContent =
+        err instanceof ExpandError
+          ? "That recording was made by an older version and cannot be replayed."
+          : "That recording could not be read.";
+    }
+  });
+  net.on(P.RATING_UPDATE, (m) => {
+    lastRating = { tempo: m.tempo, white: m.white, black: m.black };
+    showRatingChange();
+    // The identity carries the old number until the next sign-in, so refresh
+    // it here or the profile shows a rating the game just changed.
+    const seat = soloRoom ? null : net.color;
+    if (account.identity && seat) {
+      const r = account.identity.ratings[m.tempo] ??
+                { rating: m[seat].before, games: 0 };
+      account.identity.ratings[m.tempo] = { rating: m[seat].after,
+                                            games: r.games + 1 };
+    }
+    net.send({ type: P.LIST_GAMES });
+  });
   net.on(P.MOVE_REJECTED, (m) => setStatus(`rejected: ${m.reason}`, true));
   net.on(P.OPPONENT_LEFT, (m) => startLeftCountdown(m.grace_seconds ?? 30));
   net.on(P.OPPONENT_REJOINED, () => {
@@ -199,6 +266,10 @@ async function ensureConnected(): Promise<boolean> {
 
   try {
     await net.connect();
+    // A stored token is offered as soon as there is a socket to offer it on,
+    // so a reload comes back signed in. Done here rather than at page load
+    // because this also runs after a reconnect.
+    account.resume((m) => net.send(m));
     return true;
   } catch (err) {
     setStatus(String((err as Error).message), true);
@@ -492,6 +563,10 @@ function enterGame(): void {
   gameEl.style.display = "block";
   gameBar.style.display = "flex";
   matchLogged = false;
+  // A rating line left over from the previous game would sit under this one's
+  // result until the server replaced it, which for an unrated game is never.
+  lastRating = null;
+  $("pg-rating").textContent = "";
   // Nobody to resign to when both sides are yours: exiting is the way out.
   $("btn-resign").style.display = soloRoom ? "none" : "";
   renderer = new Renderer(canvas, net.color);
@@ -663,10 +738,167 @@ function logMatch(final: GameState): void {
 const civLabel = (civ: string | null | undefined) =>
   civ ? civ[0].toUpperCase() + civ.slice(1) : "None";
 
+/** Fill in the account panels from whatever the server last told us. */
+function renderAccount(): void {
+  const who = account.identity;
+  ($("pf-signed-out") as HTMLElement).hidden = !!who;
+  ($("pf-signed-in") as HTMLElement).hidden = !who;
+  if (!who) return;
+
+  $("pf-name").textContent = `Signed in as ${who.name}`;
+  const box = $("pf-ratings");
+  box.textContent = "";
+  // Every mode is shown, including unplayed ones: a missing tile reads as a
+  // bug, while "unrated" reads as an invitation.
+  for (const mode of ["bullet", "rapid", "slow"]) {
+    const r = who.ratings?.[mode];
+    const tile = document.createElement("div");
+    tile.className = r ? "rating" : "rating unplayed";
+    const label = document.createElement("span");
+    label.className = "mode";
+    label.textContent = mode;
+    const value = document.createElement("span");
+    value.className = "value";
+    value.textContent = r ? String(Math.round(r.rating)) : "unrated";
+    tile.append(label, value);
+    if (r) {
+      const games = document.createElement("span");
+      games.className = "games";
+      games.textContent = ` ${r.games} game${r.games === 1 ? "" : "s"}`;
+      tile.append(games);
+    }
+    box.append(tile);
+  }
+}
+
+function setAuthBusy(busy: boolean): void {
+  for (const id of ["btn-signin", "btn-signup"]) {
+    ($(id) as HTMLButtonElement).disabled = busy;
+  }
+}
+
+function submitAuth(kind: "in" | "up"): void {
+  const name = ($("ac-name") as HTMLInputElement).value.trim();
+  const pass = ($("ac-pass") as HTMLInputElement).value;
+  $("ac-status").classList.remove("error");
+  $("ac-status").textContent = "";
+  if (!name || !pass) {
+    $("ac-status").textContent = "Enter a name and a password.";
+    $("ac-status").classList.add("error");
+    return;
+  }
+  setAuthBusy(true);
+  void (async () => {
+    if (!(await ensureConnected())) {
+      setAuthBusy(false);
+      return;
+    }
+    const send = (m: object) => net.send(m);
+    if (kind === "in") account.signIn(send, name, pass);
+    else account.signUp(send, name, pass);
+  })();
+}
+
+/** One row of the match list, built from nodes rather than markup. */
+function matchRow(opts: {
+  outcome: string; cls: string; detail: string; when: string;
+  rating: { before: number; after: number } | null;
+  onWatch: (() => void) | null; missing: string;
+}): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "match";
+  const what = document.createElement("span");
+  what.className = "what";
+  const result = document.createElement("span");
+  result.className = `result ${opts.cls}`;
+  result.textContent = opts.outcome;
+  what.append(result, ` ${opts.detail}`);
+  if (opts.rating) {
+    // The number people actually look for. Signed, because "1216" alone does
+    // not say whether the game was worth playing.
+    const delta = Math.round(opts.rating.after) - Math.round(opts.rating.before);
+    const el = document.createElement("span");
+    el.className = `delta ${delta >= 0 ? "up" : "down"}`;
+    el.textContent = `${delta >= 0 ? "+" : ""}${delta}`;
+    what.append(el);
+  }
+  const when = document.createElement("span");
+  when.className = "when";
+  when.textContent = opts.when;
+  what.append(when);
+  row.append(what);
+  if (opts.onWatch) {
+    const btn = document.createElement("button");
+    btn.textContent = "Watch replay";
+    btn.addEventListener("click", opts.onWatch);
+    row.append(btn);
+  } else if (opts.missing) {
+    const gone = document.createElement("span");
+    gone.className = "gone";
+    gone.textContent = opts.missing;
+    row.append(gone);
+  }
+  return row;
+}
+
+const duration = (seconds: number) => {
+  const mins = Math.floor(seconds / 60);
+  return `${mins ? `${mins}m ` : ""}${seconds % 60}s`;
+};
+
 function renderProfile(): void {
-  const rows = matchHistory();
+  renderAccount();
   const list = $("pf-list");
   list.textContent = "";
+  $("pf-storage-note").textContent = account.identity
+    ? "Your games are kept on the server and replay from anywhere you sign in."
+    : "Without an account, results are kept in this browser and a replay lives " +
+      "in memory only: reloading keeps the result and loses the recording.";
+  ($("btn-clear-history") as HTMLElement).hidden = !!account.identity;
+
+  if (account.identity) {
+    renderStored(list);
+    return;
+  }
+  renderLocal(list);
+}
+
+/** Games the server holds for this account. */
+function renderStored(list: HTMLElement): void {
+  const rows = storedGames;
+  const rated = rows.filter((g) => g.rated);
+  const won = rows.filter((g) => g.winner === g.seat).length;
+  const drawn = rows.filter((g) => g.winner === "draw").length;
+  $("pf-summary").textContent = rows.length
+    ? `${rows.length} game${rows.length === 1 ? "" : "s"}: ` +
+      `${won} won, ${rows.length - won - drawn} lost, ${drawn} drawn` +
+      `${rated.length ? `, ${rated.length} rated` : ""}.`
+    : "No games yet. Sign in on any device to see them here.";
+
+  for (const g of rows) {
+    const them = g.seat === "white" ? "black" : "white";
+    const outcome = g.winner === "draw" ? "Draw"
+                  : g.winner === g.seat ? "Won" : "Lost";
+    const cls = g.winner === "draw" ? "" : g.winner === g.seat ? "win" : "loss";
+    const versus = g.opponent ?? "an anonymous player";
+    list.append(matchRow({
+      outcome,
+      cls,
+      detail: `as ${g.seat} vs ${versus}, ` +
+              `${civLabel(g.civs[g.seat])} vs ${civLabel(g.civs[them])}`,
+      when: `${g.tempo}${g.rated ? ", rated" : ""}, ` +
+            `${duration(Math.round(g.ticks / 20))}, ` +
+            `${new Date(g.at * 1000).toLocaleString()}`,
+      rating: g.rating,
+      onWatch: () => net.send({ type: P.GET_GAME, id: g.id }),
+      missing: "",
+    }));
+  }
+}
+
+/** Games this browser remembers, for players without an account. */
+function renderLocal(list: HTMLElement): void {
+  const rows = matchHistory();
   const played = rows.filter((m) => !m.solo && m.winner !== "unfinished");
   const won = played.filter((m) => m.winner === m.seat).length;
   const drawn = played.filter((m) => m.winner === "draw").length;
@@ -678,8 +910,6 @@ function renderProfile(): void {
     : "No games yet.";
 
   for (const m of rows) {
-    const row = document.createElement("div");
-    row.className = "match";
     const outcome =
       m.winner === "unfinished" ? "Unfinished"
       : m.solo ? (m.winner === "draw" ? "Draw" : `${civLabel(m.winner)} wins`)
@@ -691,40 +921,29 @@ function renderProfile(): void {
       ? `${civLabel(m.civs.white)} vs ${civLabel(m.civs.black)}`
       : `${civLabel(m.civs[m.seat ?? "white"])} vs ` +
         `${civLabel(m.civs[m.seat === "white" ? "black" : "white"])}`;
-    const mins = Math.floor(m.seconds / 60);
-    // Built as nodes, not markup. Half of this line comes from the other
-    // player by way of the server, and it was written to localStorage the
-    // moment the game ended: as innerHTML, an opponent whose civilization was
-    // named "<iframe src=...>" got to run it on this page every time the
-    // profile was opened, for good. The server only accepts real civ names
-    // now; this is the half that does not depend on that staying true.
-    const what = document.createElement("span");
-    what.className = "what";
-    const result = document.createElement("span");
-    result.className = `result ${cls}`;
-    result.textContent = outcome;
-    const when = document.createElement("span");
-    when.className = "when";
-    when.textContent =
-      `${m.tempo}, ${mins ? `${mins}m ` : ""}${m.seconds % 60}s, ` +
-      `${new Date(m.at).toLocaleString()}`;
-    what.append(result, ` ${m.solo ? "solo" : `as ${m.seat}`}, ${sides}`, when);
-    row.append(what);
     const rec = recordings.get(m.id);
-    if (rec) {
-      const btn = document.createElement("button");
-      btn.textContent = "Watch replay";
-      btn.addEventListener("click", () =>
-        watchReplay(rec, m.solo ? null : m.seat, "profile"));
-      row.append(btn);
-    } else {
-      const gone = document.createElement("span");
-      gone.className = "gone";
-      gone.textContent = "replay expired";
-      row.append(gone);
-    }
-    list.append(row);
+    list.append(matchRow({
+      outcome,
+      cls,
+      detail: `${m.solo ? "solo" : `as ${m.seat}`}, ${sides}`,
+      when: `${m.tempo}, ${duration(m.seconds)}, ` +
+            `${new Date(m.at).toLocaleString()}`,
+      rating: null,
+      onWatch: rec ? () => watchReplay(rec, m.solo ? null : m.seat, "profile") : null,
+      missing: "replay expired",
+    }));
   }
+}
+
+/** Rating movement from the game just finished, on the post-game card. */
+function showRatingChange(): void {
+  const seat = soloRoom ? null : net.color;
+  if (!lastRating || !seat) return;
+  const mine = lastRating[seat as "white" | "black"];
+  const delta = Math.round(mine.after) - Math.round(mine.before);
+  $("pg-rating").textContent =
+    `${lastRating.tempo} rating ${Math.round(mine.after)} ` +
+    `(${delta >= 0 ? "+" : ""}${delta})`;
 }
 
 /**
@@ -804,6 +1023,8 @@ function exitToLobby(): void {
   player = null;
   recording = new Recording();
   matchLogged = false;
+  lastRating = null;
+  $("pg-rating").textContent = "";
   soloRoom = false;
   baseParams = null;
   rejoining = false;
@@ -842,7 +1063,12 @@ function showTab(name: string): void {
   // One scroll container behind all four tabs, so a new tab would otherwise
   // open at wherever the last one was left.
   $("lobby-body").scrollTop = 0;
-  if (name === "profile") renderProfile();
+  if (name === "profile") {
+    // Opening the profile with a token but no socket yet (the connect at boot
+    // can still be in flight, or have failed) must not show "signed out".
+    if (account.token() && !account.identity) void ensureConnected();
+    renderProfile();
+  }
 }
 
 /** True while a real game is running that leaving would abandon. */
@@ -969,6 +1195,22 @@ setTempo(tempo);
 for (const b of document.querySelectorAll<HTMLElement>("#tabs button")) {
   b.addEventListener("click", () => showTab(b.dataset.tab!));
 }
+$("btn-signin").addEventListener("click", () => submitAuth("in"));
+$("btn-signup").addEventListener("click", () => submitAuth("up"));
+// Enter in either field submits a sign-in: the common case by far, and a form
+// that only responds to the mouse feels broken.
+for (const id of ["ac-name", "ac-pass"]) {
+  $(id).addEventListener("keydown", (ev) => {
+    if ((ev as KeyboardEvent).key === "Enter") submitAuth("in");
+  });
+}
+$("btn-signout").addEventListener("click", () => {
+  account.signOut((m) => net?.send(m));
+  storedGames = [];
+  ($("ac-pass") as HTMLInputElement).value = "";
+  renderAccount();
+  renderProfile();
+});
 $("btn-clear-history").addEventListener("click", () => {
   localStorage.removeItem(HISTORY_KEY);
   recordings.clear();
@@ -1077,6 +1319,17 @@ window.addEventListener("keyup", (e) => {
   // The button latches precise mode; releasing the key must not cancel that.
   if (e.key === settings.preciseKey && !preciseLatched) setPrecise(false);
 });
+
+// A returning player is signed in before they touch anything, so the profile
+// is right on arrival and, more importantly, so a room they open is opened by
+// somebody. Only a stored token pays for this: a first-time visitor still
+// opens no socket until they press something.
+//
+// The ordering that makes it safe is the server's: one connection's messages
+// are dispatched one at a time, to completion, so RESUME_SESSION is fully
+// handled before any CREATE_ROOM behind it. The seat cannot be taken by a
+// player the server has not identified yet.
+if (account.token()) void ensureConnected();
 
 // A room code in the fragment makes games shareable as a link.
 if (location.hash.length > 1) {
