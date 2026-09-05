@@ -159,3 +159,9 @@ The host needs to make their port reachable. Two options:
 
 - **Port forwarding** - forward the chosen port to your machine in your router settings, then share your public IP (e.g. from [whatismyip.com](https://whatismyip.com)).
 - **Tailscale / ZeroTier** - install the same VPN app on both machines. They'll appear on a shared virtual network, so use the Tailscale/ZeroTier IP the same as a local one.
+
+## How it works
+
+[`docs/architecture.md`](docs/architecture.md) is a technical tour of the online
+version: what runs where, where authority lives, which parts are duplicated in
+both Python and TypeScript and what keeps them in step.

@@ -9,3 +9,11 @@ node_modules/
 web/dist/
 CHEATSHEET.md
 .wrangler/
+
+# Working notes and plans: mine, not the project's.
+improvement_ideas.txt
+plan.txt
+progress.md
+technical_plan.md
+online_plan.md
+docs/accounts.md
