@@ -177,7 +177,7 @@ export function withCiv(base: Params, civ: string): Params {
  * that eight of them read as a row of choices rather than a page of prose.
  */
 export const TITLE: Record<string, string> = {
-  none:      "As Written",
+  none:      "Vanilla",
   hun:       "Horse Archers",
   roman:     "The Legion",
   greek:     "The Phalanx",
@@ -187,6 +187,30 @@ export const TITLE: Record<string, string> = {
   swiss:     "Pike Square",
   byzantine: "The Walls",
 };
+
+/**
+ * A civilization's name as a player reads it. The base one is in here for the
+ * same reason it has a title and an icon: it is a choice on the same screen as
+ * the other eight, and "None" reads as having failed to pick rather than as
+ * having picked the unmodified game.
+ */
+export const NAME: Record<string, string> = {
+  none:      "Classical",
+  hun:       "Hun",
+  roman:     "Roman",
+  greek:     "Greek",
+  persian:   "Persian",
+  egyptian:  "Egyptian",
+  norse:     "Norse",
+  swiss:     "Swiss",
+  byzantine: "Byzantine",
+};
+
+/** What to call a civilization. Null is the base one, not a missing value. */
+export function civName(civ: string | null | undefined): string {
+  const key = civ ?? "none";
+  return NAME[key] ?? key[0].toUpperCase() + key.slice(1);
+}
 
 const LABEL: Record<string, string> = {
   mana_refill_rate:     "Mana regen",
@@ -216,13 +240,22 @@ export interface Effect {
 
 const fmt = (pct: number) => `${pct > 0 ? "+" : "\u2212"}${Math.abs(pct)}%`;
 
-/** Everything a civ changes, in reading order: general first, then per piece. */
-export function describe(civ: string): Effect[] {
-  const general = Object.entries(PERCENTS[civ] ?? {}).map(([param, pct]) => ({
+/**
+ * Only the effects that apply to the whole side: mana, and the values every
+ * piece shares. The in-game panel splits these from the per-piece ones, and
+ * reads both off this file so a rebalance cannot leave the two disagreeing.
+ */
+export function globalEffects(civ: string | null | undefined): Effect[] {
+  return Object.entries(PERCENTS[civ ?? ""] ?? {}).map(([param, pct]) => ({
     what: LABEL[param] ?? param,
     amount: fmt(pct),
     good: pct / PER_POINT[param] > 0,
   }));
+}
+
+/** Everything a civ changes, in reading order: general first, then per piece. */
+export function describe(civ: string): Effect[] {
+  const general = globalEffects(civ);
   const perPiece = (PIECE_TABLE[civ] ?? []).map(([piece, param, pct]) => ({
     what: `${PLURAL[piece] ?? piece}: ${(LABEL[param] ?? param).toLowerCase()}`,
     amount: fmt(pct),

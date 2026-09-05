@@ -22,8 +22,9 @@ from pathlib import Path
 import websockets
 from websockets.asyncio.server import serve
 
-from . import accounts, civs, db, params, recorder, room as room_mod
-from .room import Connection, RoomManager, FINISHED, RUNNING
+from . import (accounts, civs, db, params, recorder, room as room_mod,
+               user_settings)
+from .room import Connection, RoomManager, RUNNING
 from shared import protocol
 
 log = logging.getLogger("server")
@@ -33,11 +34,22 @@ MAX_MSG_PER_SEC = 40
 MAX_MESSAGE_BYTES = 4096
 MAX_CONNECTIONS = 200       # process-wide; Fly's proxy caps lower, this is the floor
 MAX_JOIN_FAILS = 10         # wrong room codes before the socket is closed
+MAX_ONLINE_LISTED = 60      # names in one ONLINE_LIST; the count is not capped
+GAMES_PAGE = 20             # stored games in one GAME_LIST or PROFILE
+MAX_OFFSET = 10_000         # how deep anyone may page; a bound, not a policy
 
 # Game ids are uuids. Checking the shape before the query keeps a malformed id
 # from reaching Postgres as a cast error rather than a miss.
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
                       r"[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+
+
+def _offset(value: object) -> int:
+    """A page offset from a client. Anything unusable is the first page."""
+    try:
+        return max(0, min(MAX_OFFSET, int(value)))     # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
 
 
 def _refuse_constant(name: str) -> float:
@@ -63,13 +75,34 @@ class Hub:
     def conns_from(self, ip: str) -> int:
         return sum(1 for c in self.conns if c.ip == ip)
 
+    def presence(self) -> dict:
+        """Who is connected right now.
+
+        Signed-in players are named, everyone else is only part of the count:
+        an anonymous socket has no name to show and no profile to open. The
+        named list is deduplicated by account, so a player with two tabs is one
+        person here and two in the count.
+        """
+        users: dict[str, str] = {}
+        for c in self.conns:
+            if c.user:
+                users[c.user["id"]] = c.user["name"]
+        listed = sorted(users.items(), key=lambda kv: kv[1].lower())
+        return {
+            "count": len(self.conns),
+            "signed_in": len(users),
+            "users": [{"id": i, "name": n} for i, n in listed[:MAX_ONLINE_LISTED]],
+        }
+
     # -- message handlers ---------------------------------------------------
 
     async def on_create(self, conn: Connection, msg: dict) -> None:
         if conn.room is not None:
             await conn.error("already in a room")
             return
-        room = await self.rooms.create(conn, msg)
+        # An open game is a public room: it goes in the LIST_ROOMS listing and
+        # quick match can land in it. A private one is reachable by code only.
+        room = await self.rooms.create(conn, msg, public=bool(msg.get("public")))
         if room is None:
             return
         await conn.send({
@@ -150,6 +183,11 @@ class Hub:
             "color": color,
             "token": token,
         })
+        # The room as it stands, to both seats. Without this the player coming
+        # back has ROOM_JOINED and nothing else, so their screen draws an
+        # opponent it has never been told about: "not here yet", about
+        # somebody sitting right there waiting for them.
+        await room.notify_state()
         log.info("room %s: %s rejoined", code, color)
 
     async def on_set_ready(self, conn: Connection, msg: dict) -> None:
@@ -166,13 +204,6 @@ class Hub:
             log.warning("rejected civ from %s: %r", conn.ip, civ)
             await conn.error("unknown civilization")
             return
-        # A civilization multiplies the tempo, so this is where a piece-size
-        # modifier lands: the opening position has to be checked here too.
-        _, reason = civs.resolve_checked(room.base_params, civ)
-        if reason:
-            log.warning("rejected ready from %s: %s", conn.ip, reason)
-            await conn.error(reason)
-            return
         # One client holds both seats in solo, so it says which one it is
         # readying. Anywhere else the seat is the one the server assigned, and
         # a solo client that names no seat readies both with the same choice.
@@ -180,6 +211,15 @@ class Hub:
         if room.solo:
             named = msg.get("color")
             seats = [named] if named in ("white", "black") else ["white", "black"]
+        # A civilization multiplies the tempo, so this is where a piece-size
+        # modifier lands: the opening position has to be checked here too.
+        # Against this seat's own tempo, which a balanced room sets per side.
+        for seat in seats:
+            _, reason = civs.resolve_checked(room.base_params[seat], civ)
+            if reason:
+                log.warning("rejected ready from %s: %s", conn.ip, reason)
+                await conn.error(reason)
+                return
         for seat in seats:
             room.set_ready(seat, bool(msg.get("ready")), civ)
         await room.notify_state()
@@ -242,35 +282,59 @@ class Hub:
         await accounts.sign_out(msg.get("token", ""))
         await self._send_auth(conn, None)
 
+    async def on_set_settings(self, conn: Connection, msg: dict) -> None:
+        """Store the settings this account has an opinion about.
+
+        Silent for a signed-out socket: the device keeps its own copy either
+        way, so there is nothing for the player to do about a failure here and
+        nothing lost by it. `clean` drops what it does not recognise rather
+        than refusing, so a newer client loses one setting on an older server.
+        """
+        if conn.user is None:
+            return
+        await db.set_user_settings(conn.user["id"],
+                                   user_settings.clean(msg.get("settings")))
+
     # -- stored games -------------------------------------------------------
 
     async def on_list_games(self, conn: Connection, msg: dict) -> None:
         if conn.user is None:
-            await conn.send({"type": protocol.GAME_LIST, "games": []})
+            await conn.send({"type": protocol.GAME_LIST,
+                             "games": [], "offset": 0, "total": 0})
             return
-        games = await db.recent_games(conn.user["id"])
-        await conn.send({"type": protocol.GAME_LIST, "games": games})
+        page = await db.recent_games(conn.user["id"], limit=GAMES_PAGE,
+                                     offset=_offset(msg.get("offset")))
+        await conn.send({"type": protocol.GAME_LIST, **page})
 
     async def on_get_game(self, conn: Connection, msg: dict) -> None:
-        """One stored game with its recording, for replay.
+        """One stored game with its recording, for replay. No sign-in needed.
 
-        Signing in is required, and the game must be one this account played.
-        The stored log is the whole truth - both sides' hidden preparation and
-        destinations - so handing it to anyone with an id would give away
-        exactly what the room's visibility settings existed to conceal. For a
-        finished game of your own that is fine; for anyone else's it is not.
+        Anybody holding the id may watch: a game once played is a public
+        record, and looking through an opponent's past games is most of the
+        point of having profiles at all. It used to ask for an account, which
+        left a player without one unable to watch the game they had just
+        finished: their client fell back to the frames it had been sent, which
+        the room's visibility settings had already stripped. Two ways into a
+        replay showing two different games is what that gate cost.
+
+        It bought little in return. `on_get_profile` needs no account either
+        and answers with a page of game ids, so the ids were already readable
+        anonymously - only the recordings behind them were not. What is left
+        is that an id is unguessable, which is the model the schema describes:
+        replayable by whoever holds the link.
+
+        Worth knowing what that gives away. A recording is the whole truth,
+        including the preparation and the destinations the room's visibility
+        settings hid from the opponent while it was being played. That is over
+        by the time it is stored, but it does mean past games can be studied
+        in a detail the live game refused.
         """
-        if conn.user is None:
-            await conn.error("sign in to watch a stored game")
-            return
         game_id = str(msg.get("id", ""))
         if not _UUID_RE.match(game_id):
             await conn.error("no such game")
             return
         record = await db.get_game(game_id)
-        if record is None or conn.user["id"] not in record["players"]:
-            # One message for "no such game" and "not yours": otherwise this is
-            # an oracle for which ids exist.
+        if record is None:
             await conn.error("no such game")
             return
         if record["log_format"] != recorder.FORMAT:
@@ -279,6 +343,42 @@ class Hub:
             return
         await conn.send({"type": protocol.GAME_RECORD, "id": record["id"],
                          "recording": record["recording"]})
+
+    # -- finding people and games -------------------------------------------
+
+    async def on_list_rooms(self, conn: Connection, msg: dict) -> None:
+        await conn.send({"type": protocol.ROOM_LIST,
+                         "rooms": self.rooms.open_rooms()})
+
+    async def on_list_online(self, conn: Connection, msg: dict) -> None:
+        await conn.send({"type": protocol.ONLINE_LIST, **self.presence()})
+
+    async def on_get_profile(self, conn: Connection, msg: dict) -> None:
+        """One player's public card: name, ratings, and a page of their games.
+
+        No sign-in needed for the card itself - a name and a rating are what
+        the online list already shows. The games are results only; the
+        recording behind one is fetched separately, and that does ask for a
+        signed-in player.
+        """
+        if not db.enabled():
+            await conn.error("accounts are not available on this server")
+            return
+        uid = str(msg.get("id") or "")
+        name = str(msg.get("name") or "")
+        if uid and not _UUID_RE.fullmatch(uid):
+            await conn.error("no such player")
+            return
+        if name and not accounts.NAME_RE.fullmatch(name):
+            await conn.error("no such player")
+            return
+        profile = await db.public_profile(user_id=uid or None, name=name or None)
+        if profile is None:
+            await conn.error("no such player")
+            return
+        page = await db.recent_games(profile["id"], limit=GAMES_PAGE,
+                                     offset=_offset(msg.get("offset")))
+        await conn.send({"type": protocol.PROFILE, **profile, **page})
 
     async def on_queue_move(self, conn: Connection, msg: dict) -> None:
         room = conn.room
@@ -321,27 +421,44 @@ class Hub:
         room.game.forfeit(color)
 
     async def on_rematch(self, conn: Connection, msg: dict) -> None:
-        """Play the same room again. The seats and the tempo stay; both sides
-        pick a civilization and ready up through the ordinary path.
+        """Ask for the same room again. The seats and the tempo stay; both
+        sides then pick a civilization and ready up through the ordinary path.
 
-        Idempotent on purpose: both players will press it, and the second
-        press arrives at a room already back in the lobby. Answering that with
-        an error would put a failure on the screen of whoever was slower."""
+        Both players have to ask, like readying up. One press used to reset
+        the room, which pulled the other player off the result they were still
+        reading and into the civilization screen without being consulted.
+
+        Idempotent on purpose: the second press arrives at a room already back
+        in the lobby, and answering that with an error would put a failure on
+        the screen of whoever was slower."""
         room = conn.room
-        if room is None or conn.color is None or room.state == RUNNING:
+        if room is None or conn.color is None:
             return
-        if room.state == FINISHED:
+        # The room is marked FINISHED a moment after the last frame goes out,
+        # so a press on that frame can arrive while it still says RUNNING. The
+        # game being over is the condition, not the bookkeeping around it.
+        over = room.game is not None and room.game.game_over
+        if room.state == RUNNING and not over:
+            return
+        if room.state != room_mod.LOBBY:
             if not room.solo and any(room.clients[c] is None
                                      for c in ("white", "black")):
                 await conn.error("your opponent has left")
                 return
-            log.info("room %s: rematch", room.code)
-            room.reset_for_rematch()
+            # A solo client is both seats, so it agrees with itself at once.
+            for seat in (("white", "black") if room.solo else (conn.color,)):
+                room.rematch[seat] = True
+            # A no-op while the game loop is still winding up; the room runs
+            # this again itself the moment it is finished.
+            room.maybe_rematch()
         await room.notify_state()
 
     async def on_leave(self, conn: Connection, msg: dict) -> None:
         if conn.room is not None:
-            await conn.room.on_disconnect(conn)
+            # leave(), not on_disconnect(): an announced exit gives the seat
+            # back immediately, so the room can be joined again and quick
+            # match can put this player back into it.
+            await conn.room.leave(conn)
             self.rooms.sweep()
             conn.room = None
             conn.color = None
@@ -374,10 +491,18 @@ class Hub:
             await self.on_sign_out(conn, msg)
         elif kind == protocol.RESUME_SESSION:
             await self.on_resume_session(conn, msg)
+        elif kind == protocol.SET_SETTINGS:
+            await self.on_set_settings(conn, msg)
         elif kind == protocol.LIST_GAMES:
             await self.on_list_games(conn, msg)
         elif kind == protocol.GET_GAME:
             await self.on_get_game(conn, msg)
+        elif kind == protocol.LIST_ROOMS:
+            await self.on_list_rooms(conn, msg)
+        elif kind == protocol.LIST_ONLINE:
+            await self.on_list_online(conn, msg)
+        elif kind == protocol.GET_PROFILE:
+            await self.on_get_profile(conn, msg)
         elif kind == protocol.PING:
             await conn.send({"type": protocol.PONG, "t": msg.get("t"),
                              "server_time": time.time()})

@@ -313,6 +313,61 @@ def test_spent_pawn_passes_through_a_ghost() -> None:
 
 # --- the opening position ---------------------------------------------------
 
+# --- the offer has to match the target's size -------------------------------
+
+def sized_pair(pawn_d: float, enemy_d: float, gap: float) -> tuple[GameState, Piece, Piece]:
+    """A white pawn aimed at (3.5, 3.5) with an enemy `gap` away from that
+    destination, perpendicular to the flight path.
+
+    Perpendicular is the point: the closest the pawn ever gets to the enemy is
+    `gap`, at the moment it arrives. So `gap` alone decides whether the two
+    hitboxes touch, and the only question left is whether the rules agreed.
+    """
+    p = pawn("p", "white", 4.5, 4.5)
+    off = gap / math.sqrt(2.0)
+    e = other("e", PieceType.PAWN, "black", 3.5 - off, 3.5 + off)
+    g = make_game(p, e)
+    p.diameter, e.diameter = pawn_d, enemy_d
+    return g, p, e
+
+
+def test_capture_offer_uses_both_hitboxes() -> None:
+    """A big pawn must not be offered a capture of a small piece it cannot
+    reach. The threshold is the sum of the radii, so it moves with the target:
+    the same gap is a capture against a wide piece and out of range against a
+    narrow one."""
+    # Big pawn (r 0.5), small enemy (r 0.3): 0.9 apart, so they never touch.
+    g, p, _ = sized_pair(1.0, 0.6, 0.9)
+    check("a gap wider than the two radii is refused",
+          g.queue_move("p", (3.5, 3.5), "white") is not None)
+
+    # Same pawn, same gap, a wide enemy (r 0.6): now 0.9 < 1.1 and it connects.
+    g, p, _ = sized_pair(1.0, 1.2, 0.9)
+    check("the same gap against a wider piece is allowed",
+          g.queue_move("p", (3.5, 3.5), "white") is None)
+    run(g, 2.0)
+    check("and the wide piece is actually captured",
+          ids(g) == {"p"}, f"survivors {sorted(ids(g))}")
+
+    # And the narrow enemy is capturable once it is genuinely within reach.
+    g, p, _ = sized_pair(1.0, 0.6, 0.7)
+    check("a narrow piece inside the radii is allowed",
+          g.queue_move("p", (3.5, 3.5), "white") is None)
+    run(g, 2.0)
+    check("and it is actually captured",
+          ids(g) == {"p"}, f"survivors {sorted(ids(g))}")
+
+
+def test_small_pawn_may_take_a_big_piece() -> None:
+    """The other asymmetry: a small pawn reaches a wide piece from further out
+    than its own diameter would allow."""
+    g, p, _ = sized_pair(0.4, 1.2, 0.7)   # radii sum to 0.8, own diameter 0.4
+    check("a small pawn is offered the wide piece",
+          g.queue_move("p", (3.5, 3.5), "white") is None)
+    run(g, 2.0)
+    check("and takes it", ids(g) == {"p"}, f"survivors {sorted(ids(g))}")
+
+
 def test_start_overlap_rejected() -> None:
     from server.pieces import start_overlap_reason
     check("default sizes are fine", start_overlap_reason(None) is None)
@@ -339,5 +394,7 @@ if __name__ == "__main__":
     test_forward_push_still_captures_nothing_after_promoting()
     test_en_passant_still_resolves()
     test_spent_pawn_passes_through_a_ghost()
+    test_capture_offer_uses_both_hitboxes()
+    test_small_pawn_may_take_a_big_piece()
     test_start_overlap_rejected()
     print("PASS: pawn capture, promotion and opening geometry")

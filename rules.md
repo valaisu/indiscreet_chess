@@ -122,7 +122,7 @@ The Pawn has two diagonal capture landing zones, one for each diagonal forward d
 
 The player specifies any point inside one of these circles as the destination, subject to the legality constraint below.
 
-**Legality:** A destination point D is legal if and only if, at the moment the move is queued, at least one **enemy** piece has its center within `diameter_piece` of D - i.e. the Pawn's hitbox would overlap that piece upon landing. Friendly pieces do not satisfy this condition. Only the portion of the circle satisfying this condition is available; the remainder is illegal. If no enemy piece exists anywhere near the circle, the move cannot be queued at all.
+**Legality:** A destination point D is legal if and only if, at the moment the move is queued, at least one **enemy** piece has its center within the **sum of the two pieces' radii** of D - i.e. the Pawn's hitbox would overlap that piece upon landing. The sum, not the Pawn's own diameter: piece size is per piece type, so a civilization can make the Pawn and its target different sizes, and the two agree only when they happen to match. Friendly pieces do not satisfy this condition. Only the portion of the circle satisfying this condition is available; the remainder is illegal. If no enemy piece exists anywhere near the circle, the move cannot be queued at all.
 
 **During travel:** The move is an ordinary one, resolved exactly as a Bishop's is. The Pawn captures the first enemy piece its hitbox touches, spending its one capture, and then continues under Continued Movement After Capture. If that enemy was itself moving, both are removed. A friendly piece stops it at the point of contact with nothing captured, and so does any piece it cannot capture at that moment.
 

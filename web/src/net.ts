@@ -92,16 +92,49 @@ export class Net {
     this.pingTimer = null;
   }
 
-  createRoom(params: object, solo = false, view?: object): void {
-    this.send({ type: P.CREATE_ROOM, params, solo, view });
+  /**
+   * Open a room. `params` is white's column and the room's default;
+   * `paramsBlack` overrides black's and is what makes the room balanced.
+   * `isPublic` lists it in LIST_ROOMS and lets quick match land in it.
+   */
+  createRoom(params: object, solo = false, view?: object,
+             isPublic = false, paramsBlack?: object | null,
+             unrated = false): void {
+    this.send({
+      type: P.CREATE_ROOM, params, solo, view,
+      public: isPublic, params_black: paramsBlack ?? null, unrated,
+    });
+  }
+
+  listRooms(): void {
+    this.send({ type: P.LIST_ROOMS });
+  }
+
+  listOnline(): void {
+    this.send({ type: P.LIST_ONLINE });
+  }
+
+  getProfile(by: { id?: string; name?: string; offset?: number }): void {
+    this.send({ type: P.GET_PROFILE, ...by });
+  }
+
+  /** One page of your own stored games. */
+  listGames(offset = 0): void {
+    this.send({ type: P.LIST_GAMES, offset });
   }
 
   joinRoom(code: string): void {
     this.send({ type: P.JOIN_ROOM, code: code.trim().toUpperCase() });
   }
 
-  quickMatch(params: object, view?: object): void {
-    this.send({ type: P.QUICK_MATCH, params, view });
+  /**
+   * Pair up at one of the three standard tempos. Only the name goes over the
+   * wire: the server holds the presets and builds the room from its own copy,
+   * so a quick game is one both players can be told the terms of beforehand
+   * and one that can be rated.
+   */
+  quickMatch(tempo: string): void {
+    this.send({ type: P.QUICK_MATCH, tempo });
   }
 
   rejoin(code: string, token: string): void {

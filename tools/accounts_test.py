@@ -88,6 +88,30 @@ async def main() -> int:
     check("signing out kills the session", await accounts.resume(signed["token"]), None)
     ok("the other session still works", await accounts.resume(a["token"]) is not None)
 
+    # --- personal settings ------------------------------------------------
+    # The account's half of the pair. The device keeps its own copy in the
+    # browser; this is only what the account has an opinion about, so a fresh
+    # one has none and must not arrive looking like a set of defaults.
+    check("a new account has no settings",
+          await db.get_user_settings(a["id"]), {})
+    ok("they ride along with the identity", "settings" in a)
+
+    await db.set_user_settings(a["id"], {"showHints": False, "preciseKey": "q"})
+    check("they come back as they went in",
+          await db.get_user_settings(a["id"]),
+          {"showHints": False, "preciseKey": "q"})
+
+    resumed_settings = await accounts.resume(a["token"])
+    check("and a resumed session carries them",
+          (resumed_settings or {}).get("settings"),
+          {"showHints": False, "preciseKey": "q"})
+
+    # A replace, not a merge: a setting the player stopped having an opinion
+    # about has to be able to leave.
+    await db.set_user_settings(a["id"], {"showHints": True})
+    check("storing them again replaces the lot",
+          await db.get_user_settings(a["id"]), {"showHints": True})
+
     # --- hashing stays off the event loop ---------------------------------
     # A hash on the loop would stall every live game on the machine. This
     # asserts the loop keeps running while one is in flight, rather than
@@ -132,8 +156,45 @@ async def main() -> int:
     check("the rating is persisted", after["rapid"], {"rating": 1216.0, "games": 1})
     check("only the played tempo exists", sorted(after), ["rapid"])
 
+    # --- one page of games ------------------------------------------------
+    # A history row is now the whole game rather than the opponent's half of
+    # it: the same rows draw your own profile and somebody else's card, and a
+    # result means nothing without the two ratings it was played between.
+    second = await db.save_game(
+        white_user_id=b["id"], black_user_id=a["id"],
+        white_civ=None, black_civ="greek", tempo="rapid",
+        winner="draw", ticks=50, rated=False,
+        unrated_reason="the host chose an unrated game",
+        recording={"header": {}, "events": []}, log_format=1, civ_table="test")
+    games = [game_id, second]
+
+    page = await db.recent_games(a["id"], limit=20, offset=0)
+    check("both games are listed", page["total"], 2)
+    check("newest first", page["games"][0]["id"], second)
+    check("the seat is the side the page's owner played",
+          page["games"][0]["seat"], "black")
+    check("the other player is named", page["games"][0]["players"]["white"]["name"],
+          bob)
+    check("an anonymous civilization stays null",
+          page["games"][0]["players"]["white"]["civ"], None)
+    rated_row = page["games"][1]
+    check("the rating before the game is carried",
+          rated_row["players"]["white"]["rating_before"], 1200.0)
+    check("and the rating after it",
+          rated_row["players"]["white"]["rating_after"], 1216.0)
+
+    page2 = await db.recent_games(a["id"], limit=1, offset=1)
+    check("a page holds one row", len(page2["games"]), 1)
+    check("and it is the next one down", page2["games"][0]["id"], game_id)
+    check("the total is of everything, not the page", page2["total"], 2)
+    check("the offset comes back with the page", page2["offset"], 1)
+
+    profile = await db.public_profile(name=alice)
+    check("a public profile is found by name", profile["id"], a["id"])
+    check("and carries the rating", profile["ratings"]["rapid"]["rating"], 1216.0)
+
     async with db._pool.acquire() as conn:                # noqa: SLF001
-        await conn.execute("delete from games where id = $1", game_id)
+        await conn.execute("delete from games where id = any($1::uuid[])", games)
         await conn.execute("delete from users where id = any($1::uuid[])", MADE)
         left = await conn.fetchval(
             "select count(*) from users where id = any($1::uuid[])", MADE)

@@ -1,0 +1,12 @@
+-- Personal settings that follow the account.
+--
+-- The device keeps its own copy in localStorage and always has: a phone and a
+-- laptop want different input numbers. This column is the other half of that
+-- pair. Where a key is present here it overrides the device's value; where it
+-- is absent the device's stands, so an account that has never changed a
+-- setting does not impose defaults on a browser that has.
+--
+-- Only the keys the player actually changed while signed in are stored, which
+-- is why this is a jsonb object and not five columns: a key that is not here
+-- is not "the default", it is "no opinion".
+alter table users add column settings jsonb not null default '{}'::jsonb;

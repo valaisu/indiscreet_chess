@@ -9,10 +9,27 @@
 # Deploying replaces the single Fly machine, and rooms live in its memory: every
 # game in progress ends. Clients now retry and then say so, but there is no way
 # to make this seamless without persisting rooms or running two machines.
+#
+# --skip-checks deploys without running any of them. The checks are what stop a
+# protocol mismatch shipping as a game bug and what catch drift between the two
+# copies of the geometry and civilization tables, so use it only when they have
+# just passed on the same tree.
 set -euo pipefail
 cd "$(dirname "$0")"
 
+skip_checks=0
+case "${1:-}" in
+  --skip-checks) skip_checks=1 ;;
+  "") ;;
+  *) echo "usage: $0 [--skip-checks]" >&2; exit 1 ;;
+esac
+
 step() { printf '\n== %s ==\n' "$1"; }
+
+if [ "$skip_checks" -eq 1 ]; then
+  step "checks"
+  echo "skipped (--skip-checks)"
+else
 
 step "protocol version"
 py_ver=$(sed -n 's/^VERSION = \([0-9]\+\)$/\1/p' shared/protocol.py)
@@ -40,6 +57,10 @@ PYTHONPATH=. python3 tools/pawn_test.py
 step "hidden information"
 PYTHONPATH=. python3 tools/visibility_test.py
 
+step "personal settings"
+# Two layers (this device, and the account) and two copies of their shape.
+PYTHONPATH=. python3 tools/settings_test.py > /dev/null && echo "device and profile layers"
+
 step "rating"
 PYTHONPATH=. python3 tools/rating_test.py > /dev/null && echo "elo and the rated-game rule"
 
@@ -49,8 +70,15 @@ step "replay fidelity"
 # as a game nobody played and nothing on screen says so.
 PYTHONPATH=. python3 tools/replay_test.py
 
+# tools/lobby_test.py and tools/solo_test.py are not here: they need a running
+# server, and this script must work on a machine with no `websockets` installed.
+# Run them by hand against `python -m server.main --port 8799` before a release
+# that touches rooms.
+
 step "civilization budget"
 node --experimental-strip-types tools/civ_table.mjs > /dev/null
+
+fi
 
 step "server"
 # --ha=false: a second machine would strand the two halves of a game.

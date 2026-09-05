@@ -43,8 +43,43 @@ def update(white: float, black: float, winner: str,
     return new_white, new_black
 
 
-def rated_reason(solo: bool, base_params: dict | None, view: dict | None,
-                 white_user_id: str | None, black_user_id: str | None) -> str | None:
+def settings_reason(solo: bool, base_params: dict[str, dict] | None,
+                    view: dict | None, unrated: bool = False) -> str | None:
+    """Why this *room* cannot host a rated game, whoever ends up sitting in it.
+
+    Split out from rated_reason because the two answer different questions.
+    An open-game listing has one player in it at most, so asking the full
+    question there would label every waiting room "both players must be
+    signed in" - true, and nothing to do with the room.
+    """
+    if unrated:
+        # Asked for. A player may want a game that cannot cost them anything,
+        # and refusing that is how people stop playing the rated ones.
+        return "the host chose an unrated game"
+    if solo:
+        return "solo games are not rated"
+    seats = base_params or {}
+    white_p, black_p = seats.get("white"), seats.get("black")
+    if white_p != black_p:
+        # The whole point of a handicap is that the sides are not equal, so
+        # the result measures the handicap rather than the players.
+        return "balanced games are not rated"
+    if presets.tempo_name(white_p) is None:
+        # Rating a custom tempo would measure the settings, not the players.
+        return "only the standard tempos are rated"
+    merged = params.build_view(view)
+    if merged != params.VIEW_DEFAULTS:
+        # Visibility changes what the game is. A room where you can see the
+        # opponent's destinations is a different skill from one where you
+        # cannot, and one rating cannot span both.
+        return "only the default visibility settings are rated"
+    return None
+
+
+def rated_reason(solo: bool, base_params: dict[str, dict] | None,
+                 view: dict | None,
+                 white_user_id: str | None, black_user_id: str | None,
+                 unrated: bool = False) -> str | None:
     """Why this game cannot be rated, or None if it can.
 
     A reason rather than a bool so the lobby can say which condition is
@@ -55,19 +90,11 @@ def rated_reason(solo: bool, base_params: dict | None, view: dict | None,
     repeatedly, and feed a second account. That is invisible to a check that
     only asks whether each seat is signed in.
     """
-    if solo:
-        return "solo games are not rated"
+    reason = settings_reason(solo, base_params, view, unrated)
+    if reason:
+        return reason
     if not (white_user_id and black_user_id):
         return "both players must be signed in"
     if white_user_id == black_user_id:
         return "a game against yourself is not rated"
-    if presets.tempo_name(base_params) is None:
-        # Rating a custom tempo would measure the settings, not the players.
-        return "only the standard tempos are rated"
-    merged = params.build_view(view)
-    if merged != params.VIEW_DEFAULTS:
-        # Visibility changes what the game is. A room where you can see the
-        # opponent's destinations is a different skill from one where you
-        # cannot, and one rating cannot span both.
-        return "only the default visibility settings are rated"
     return None

@@ -181,8 +181,8 @@ async def get_game(game_id: str) -> dict | None:
         "rated": row["rated"],
         "unrated_reason": row["unrated_reason"],
         "log_format": row["log_format"],
-        # Who is allowed to watch it. The caller decides what to do with that;
-        # this file only reports who played.
+        # Who played it. Any signed-in player may watch a finished game, so
+        # this is no longer a permission - it is who the replay is of.
         "players": {str(row[c]) for c in ("white_user_id", "black_user_id")
                     if row[c] is not None},
         "recording": unpack_log(row["log"]),
@@ -275,6 +275,33 @@ async def sweep_sessions() -> int:
 
 
 # ---------------------------------------------------------------------------
+# Personal settings
+# ---------------------------------------------------------------------------
+# The account's half of the pair. The device keeps its own copy in
+# localStorage; where a key exists here it overrides that one.
+
+async def get_user_settings(user_id: str) -> dict:
+    """What this account has an opinion about. Empty means "no opinion", which
+    leaves whatever the browser it signs in on already had."""
+    if _pool is None:
+        return {}
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow("select settings from users where id = $1",
+                                  user_id)
+    return {} if row is None else json.loads(row["settings"])
+
+
+async def set_user_settings(user_id: str, values: dict) -> None:
+    """Replace them. A replace and not a merge, because the client sends the
+    whole object it holds and a setting it dropped has to be able to go."""
+    if _pool is None:
+        return
+    async with _pool.acquire() as conn:
+        await conn.execute("update users set settings = $2 where id = $1",
+                           user_id, json.dumps(values))
+
+
+# ---------------------------------------------------------------------------
 # Ratings
 # ---------------------------------------------------------------------------
 
@@ -288,6 +315,31 @@ async def get_ratings(user_id: str) -> dict[str, dict]:
         """, user_id)
     return {r["tempo"]: {"rating": round(r["rating"], 1),
                          "games": r["games_played"]} for r in rows}
+
+
+async def public_profile(*, user_id: str | None = None,
+                         name: str | None = None) -> dict | None:
+    """One player as anyone is allowed to see them: name, id and ratings.
+
+    Their games are a separate query (recent_games), because they are paged
+    and this is not: a card is one row, a history is as long as the player has
+    been playing.
+    """
+    if _pool is None:
+        return None
+    if not user_id and not name:
+        return None
+    async with _pool.acquire() as conn:
+        if user_id:
+            row = await conn.fetchrow(
+                "select id, name from users where id = $1", user_id)
+        else:
+            row = await conn.fetchrow(
+                "select id, name from users where name = $1", name)
+    if row is None:
+        return None
+    uid = str(row["id"])
+    return {"id": uid, "name": row["name"], "ratings": await get_ratings(uid)}
 
 
 async def apply_rating(*, game_id: str, white_user_id: str, black_user_id: str,
@@ -349,16 +401,29 @@ async def apply_rating(*, game_id: str, white_user_id: str, black_user_id: str,
     }
 
 
-async def recent_games(user_id: str, limit: int = 50) -> list[dict]:
-    """A player's finished games, newest first, without the recordings.
+async def recent_games(user_id: str, limit: int = 20, offset: int = 0) -> dict:
+    """One page of a player's finished games, newest first, without recordings.
 
-    The log is deliberately not selected: it is most of the row, and a list of
-    fifty would be a megabyte to send so somebody can read the results. The
+    The log is deliberately not selected: it is most of the row, and a page of
+    them would be a megabyte to send so somebody can read the results. The
     recording is fetched one game at a time, when a replay is actually opened.
+
+    Both players are described, not just the opponent, because this list is
+    now also how one player looks at another's profile - and because a result
+    means nothing without the two ratings it was played between. `seat` is
+    which side the player whose page this is was on; everything the caller
+    wants about "them" and "the other one" follows from that and `players`,
+    rather than being sent twice and drifting.
+
+    Returns the page with the total, so a pager can say how far it goes.
     """
     if _pool is None:
-        return []
+        return {"games": [], "offset": 0, "total": 0}
     async with _pool.acquire() as conn:
+        total = await conn.fetchval("""
+            select count(*) from games
+            where white_user_id = $1 or black_user_id = $1
+        """, user_id)
         rows = await conn.fetch("""
             select g.id, g.played_at, g.white_user_id, g.black_user_id,
                    g.white_civ, g.black_civ, g.tempo, g.winner, g.ticks,
@@ -371,26 +436,30 @@ async def recent_games(user_id: str, limit: int = 50) -> list[dict]:
             left join users b on b.id = g.black_user_id
             where g.white_user_id = $1 or g.black_user_id = $1
             order by g.played_at desc
-            limit $2
-        """, user_id, limit)
+            limit $2 offset $3
+        """, user_id, limit, offset)
 
-    out = []
+    def side(r, color: str) -> dict:
+        before, after = r[f"{color}_rating_before"], r[f"{color}_rating_after"]
+        return {
+            # Null is the answer for an anonymous seat, not a missing value.
+            "name": r[f"{color}_name"],
+            "civ": r[f"{color}_civ"],
+            "rating_before": None if before is None else round(before, 1),
+            "rating_after": None if after is None else round(after, 1),
+        }
+
+    games = []
     for r in rows:
-        seat = "white" if str(r["white_user_id"]) == user_id else "black"
-        before, after = r[f"{seat}_rating_before"], r[f"{seat}_rating_after"]
-        out.append({
+        games.append({
             "id": str(r["id"]),
             "at": r["played_at"].timestamp(),
-            "seat": seat,
+            "seat": "white" if str(r["white_user_id"]) == user_id else "black",
             "tempo": r["tempo"],
             "winner": r["winner"],
             "ticks": r["ticks"],
             "rated": r["rated"],
             "unrated_reason": r["unrated_reason"],
-            "civs": {"white": r["white_civ"], "black": r["black_civ"]},
-            # The opponent's name, or null when they were anonymous.
-            "opponent": r["black_name"] if seat == "white" else r["white_name"],
-            "rating": None if before is None else {"before": round(before, 1),
-                                                   "after": round(after, 1)},
+            "players": {c: side(r, c) for c in ("white", "black")},
         })
-    return out
+    return {"games": games, "offset": offset, "total": int(total or 0)}

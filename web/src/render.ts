@@ -9,7 +9,7 @@
 
 import { canCastle, DIAMETER_PIECE, type Piece } from "./geometry.ts";
 import { type GameState, forPiece } from "./protocol.ts";
-import { pieceMarks } from "./civs.ts";
+import { civName, pieceMarks } from "./civs.ts";
 
 const C_BG = "#241a12";
 const C_LIGHT = "#f0d9b5";
@@ -464,14 +464,12 @@ export class Renderer {
       ctx.fillText(`${color}  ${value.toFixed(1)} / ${max.toFixed(1)}`,
                    x + 6, y + this.manaH / 2);
       // The side's civilization on its own bar: the row already says whose
-      // this is, so naming it here costs no new furniture.
-      const civ = state.civs?.[color];
-      if (civ) {
-        ctx.textAlign = "right";
-        ctx.fillText(civ[0].toUpperCase() + civ.slice(1), x + barW - 6,
-                     y + this.manaH / 2);
-        ctx.textAlign = "left";
-      }
+      // this is, so naming it here costs no new furniture. The base one is
+      // named too - it is a pick like the other eight, not the absence of one.
+      ctx.textAlign = "right";
+      ctx.fillText(civName(state.civs?.[color]), x + barW - 6,
+                   y + this.manaH / 2);
+      ctx.textAlign = "left";
     }
     void width;
   }

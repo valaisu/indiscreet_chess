@@ -51,7 +51,11 @@ def main() -> int:
     check("favourite loses a lot", round(down - 1600.0, 2), -14.55)
 
     # --- which games count ------------------------------------------------
-    rapid = presets.PRESETS["rapid"]
+    # base_params is per seat: both sides of an even room hold the same dict.
+    rapid_row = presets.PRESETS["rapid"]
+    def both(p: dict) -> dict:
+        return {"white": p, "black": p}
+    rapid = both(rapid_row)
     check("a standard signed-in game is rated",
           rating.rated_reason(False, rapid, None, "u1", "u2"), None)
     check("defaults passed explicitly are still rated",
@@ -63,7 +67,8 @@ def main() -> int:
           rating.rated_reason(False, rapid, None, "u1", None),
           "both players must be signed in")
     check("a custom tempo is not rated",
-          rating.rated_reason(False, {**rapid, "cooldown": 1.25}, None, "u1", "u2"),
+          rating.rated_reason(False, both({**rapid_row, "cooldown": 1.25}),
+                              None, "u1", "u2"),
           "only the standard tempos are rated")
     check("one account on both sides is not rated",
           rating.rated_reason(False, rapid, None, "u1", "u1"),
@@ -71,6 +76,49 @@ def main() -> int:
     check("altered visibility is not rated",
           rating.rated_reason(False, rapid, {"enemy_dest": True}, "u1", "u2"),
           "only the default visibility settings are rated")
+
+    # A balanced room is deliberately uneven, so its result measures the
+    # handicap. Checked before the tempo, because both sides can be standard
+    # presets and the room still not be a fair game.
+    faster_black = {"white": rapid_row,
+                    "black": {**rapid_row, "mana_refill_rate": 0.25}}
+    check("a balanced room is not rated",
+          rating.rated_reason(False, faster_black, None, "u1", "u2"),
+          "balanced games are not rated")
+    check("two different standard tempos are not rated either",
+          rating.rated_reason(False,
+                              {"white": presets.PRESETS["bullet"],
+                               "black": presets.PRESETS["slow"]},
+                              None, "u1", "u2"),
+          "balanced games are not rated")
+    check("an equal room built from two separate dicts is still rated",
+          rating.rated_reason(False,
+                              {"white": dict(rapid_row), "black": dict(rapid_row)},
+                              None, "u1", "u2"),
+          None)
+    # The host can simply say no. Checked first, because it is the one reason
+    # that is a choice rather than a property of the room, and a player who
+    # asked for an unrated game should be told that, not something else.
+    check("an unrated room is not rated",
+          rating.rated_reason(False, rapid, None, "u1", "u2", unrated=True),
+          "the host chose an unrated game")
+    check("unrated outranks the other reasons",
+          rating.rated_reason(True, faster_black, {"enemy_dest": True},
+                              "u1", None, unrated=True),
+          "the host chose an unrated game")
+
+    # settings_reason answers the same question about the room alone. An open
+    # room has one player in it at most, so asking the full question there
+    # would label every waiting room "both players must be signed in".
+    check("an empty standard room could host a rated game",
+          rating.settings_reason(False, rapid, None), None)
+    check("the settings answer ignores who is sitting there",
+          rating.settings_reason(False, faster_black, None),
+          "balanced games are not rated")
+    check("the settings answer honours the unrated flag",
+          rating.settings_reason(False, rapid, None, unrated=True),
+          "the host chose an unrated game")
+
     for mode in presets.MODES:
         check(f"{mode} is a recognised tempo",
               presets.tempo_name(presets.PRESETS[mode]), mode)

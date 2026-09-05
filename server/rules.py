@@ -168,11 +168,18 @@ def _check_pawn(piece: Piece, dest_x: float, dest_y: float,
 
 def _piece_at_dest(dest_x: float, dest_y: float, pawn: Piece,
                    all_pieces: list[Piece]) -> bool:
-    """True if any enemy piece has its hitbox overlapping dest_x, dest_y."""
+    """True if the pawn, standing at the destination, would be touching an
+    enemy hitbox.
+
+    The threshold is the sum of the two radii, which is what physics uses to
+    decide a contact. Using the pawn's own diameter assumes the target is the
+    same size: a civilization that sizes types apart then makes this offer
+    captures that cannot happen, and the pawn flies out and lands on nothing.
+    """
     for other in all_pieces:
         if other is pawn or other.owner == pawn.owner:
             continue
-        if math.hypot(other.x - dest_x, other.y - dest_y) < pawn.diameter:
+        if math.hypot(other.x - dest_x, other.y - dest_y) < pawn.radius + other.radius:
             return True
     return False
 
