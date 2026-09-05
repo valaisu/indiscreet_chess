@@ -13,6 +13,8 @@ asserts both resolve every civilization to the same params. Edit civs.ts first;
 it is the one with the reasoning written down.
 """
 
+import hashlib
+import json
 import math
 
 from . import params
@@ -59,6 +61,22 @@ PERCENTS: dict[str, dict[str, float]] = {
     civ: {key: row[col] for key, row in TABLE.items() if row[col] != 0}
     for col, civ in enumerate(CIV_NAMES)
 }
+
+
+def table_fingerprint() -> str:
+    """A short id for the civilization table as it stands right now.
+
+    Stored with every finished game, so balance figures can be grouped by the
+    table they were played under. Without it, a win rate silently averages
+    games from before and after a rebalance, and the number that says whether
+    the rebalance worked is the one thing it cannot tell you.
+
+    Derived rather than hand-bumped: a version constant that has to be
+    remembered will be forgotten in exactly the commit that changes a
+    percentage.
+    """
+    blob = json.dumps([PERCENTS, PIECE_TABLE], sort_keys=True).encode()
+    return hashlib.sha256(blob).hexdigest()[:12]
 
 
 def _round3(value: float) -> float:

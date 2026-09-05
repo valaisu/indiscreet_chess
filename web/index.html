@@ -64,6 +64,15 @@
         font-size: 1.1rem; font-weight: 600; letter-spacing: 0.02em;
         color: var(--parchment); margin: 0; white-space: nowrap;
       }
+      /* Pushed to the right of the tabs: it is a report, not a fifth tab, and
+         it is also the shortest way to the profile. */
+      .whoami {
+        margin-left: auto; padding: 0.35rem 0.7rem; font-size: 0.8rem;
+        background: transparent; border-color: var(--wood-line);
+        color: var(--muted); white-space: nowrap; max-width: 11rem;
+        overflow: hidden; text-overflow: ellipsis;
+      }
+      .whoami.in { color: var(--gold); border-color: var(--gold); }
       #lobby-body { flex: 1; overflow-y: auto; padding: 1.6rem 1.25rem 3rem; }
       @media (max-width: 30rem) {
         #topbar .brand { display: none; } /* the tabs matter more than the name */
@@ -130,6 +139,17 @@
       .help.inline::after { right: auto; left: -0.5rem; }
 
       /* One row, one choice. */
+      /* One row: what the buttons do, then the choice they are between. The
+         label is outside the group because it names all three. */
+      .quick { display: flex; align-items: center; gap: 0.6rem; }
+      .quick .qlabel { color: var(--muted); font-size: 0.9rem; white-space: nowrap; }
+      .quick .segmented { flex: 1; }
+      .pager {
+        display: flex; align-items: center; gap: 0.6rem; margin-top: 0.6rem;
+        font-size: 0.8rem; color: var(--muted);
+      }
+      .pager button { padding: 0.35rem 0.7rem; font-size: 0.8rem; }
+      .pager button:disabled { opacity: 0.4; cursor: default; }
       .segmented {
         display: flex; border: 1px solid var(--wood-line);
         border-radius: 5px; overflow: hidden;
@@ -154,11 +174,84 @@
       details summary { cursor: pointer; color: var(--muted); font-size: 0.85rem; }
       details[open] summary { margin-bottom: 0.5rem; }
       .params { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+      /* Balanced mode puts a second box in each row. Hidden rather than
+         unbuilt, so readParams can always find both and setTempo can write
+         both without caring which mode the screen is in. */
+      .pair { display: flex; gap: 0.35rem; }
+      .pair > input { flex: 1; min-width: 0; }
+      .params:not(.balanced) .pair > input[data-seat="black"] { display: none; }
+      .params.balanced .pair > input[data-seat="black"] {
+        border-color: #6d5330; background: #241a12;
+      }
+      .sw-w { color: var(--gold); }
+      .sw-b { color: #c9a668; }
+
+      /* The create and find screens: same wood ground and column as #pregame. */
+      #create, #find { display: none; max-width: 46rem; margin: 0 auto;
+                       padding: 0 1.25rem 2rem; height: 100dvh; overflow-y: auto; }
+      #create > h1, #find > h1 { margin-top: 1.7rem; }
+      .screen-buttons { margin: 1rem 0 0.5rem; }
+      #create-status, #find-status { min-height: 1.2rem; margin-top: 0.6rem;
+                                     font-size: 0.9rem; }
+
+      /* Open games and online players: rows that are pressable as a whole. */
+      .online { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+      .online button {
+        width: auto; flex: 0 0 auto; padding: 0.3rem 0.7rem; font-size: 0.85rem;
+      }
+      .find-row {
+        display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+        border: 1px solid var(--wood-line); border-radius: 6px;
+        padding: 0.7rem 0.85rem; margin-bottom: 0.6rem;
+      }
+      .find-row .grow { flex: 1; min-width: 12rem; }
+      .find-row .code { font-weight: 700; letter-spacing: 0.12em; }
+      .find-row .meta { font-size: 0.82rem; opacity: 0.85; }
+      .find-row button { width: auto; flex: 0 0 auto; }
+      .tag {
+        display: inline-block; border: 1px solid var(--wood-line);
+        border-radius: 999px; padding: 0.05rem 0.5rem; margin-right: 0.3rem;
+        font-size: 0.75rem;
+      }
+      .tag.bal { border-color: var(--gold); color: var(--gold); }
+
+      #player-card {
+        position: fixed; inset: 0; z-index: 40; display: flex;
+        align-items: center; justify-content: center; padding: 1.25rem;
+        background: rgba(0, 0, 0, 0.6);
+      }
+      #player-card .pc-inner {
+        background: var(--wood); border: 1px solid var(--wood-line);
+        border-radius: 8px; padding: 1.1rem 1.25rem;
+        width: min(28rem, 100%); max-height: 80vh; overflow-y: auto;
+      }
+      #player-card h2 { margin: 0 0 0.4rem; }
+
+      #pg-terms { margin: 0.75rem 0 0.25rem; font-size: 0.85rem; }
+      #pg-terms .terms-head { opacity: 0.85; margin-bottom: 0.35rem; }
+      #pg-terms .terms-rated { color: var(--gold); margin-bottom: 0.35rem; }
+      #pg-terms table { border-collapse: collapse; width: 100%; }
+      #pg-terms th, #pg-terms td {
+        text-align: right; padding: 0.2rem 0.4rem;
+        border-bottom: 1px solid var(--wood-line);
+      }
+      #pg-terms th:first-child, #pg-terms td:first-child { text-align: left; }
+      #pg-terms th { opacity: 0.8; font-weight: 600; }
+      #pg-terms th.mine { color: var(--gold); }
+      #pg-terms .worse { color: #d98b7a; }
+      #pg-terms .better { color: #8fbf7a; }
       #status { min-height: 1.25rem; font-size: 0.85rem; color: #9ec27e; }
       #status.error { color: #dd8f78; }
 
       #game { display: none; position: relative; height: 100dvh; }
       #board { width: 100%; height: 100%; display: block; touch-action: none; }
+      /* While a replay is up the board is drawn in what is left above the bar,
+         so nothing the replay is for ends up underneath it. The renderer is
+         told to resize when this class goes on or off. */
+      :root { --replay-bar-h: 3rem; }
+      #game.replaying #board { height: calc(100dvh - var(--replay-bar-h)); }
+      /* Precise mode is for making a move. There are no moves to make here. */
+      #game.replaying #btn-precise { display: none; }
       #pregame { display: none; max-width: 46rem; margin: 0 auto;
                  padding: 0 1.25rem 2rem; height: 100dvh; overflow-y: auto; }
       #pregame > h1 { margin-top: 1.7rem; }
@@ -200,6 +293,9 @@
       .card li .amt { font-variant-numeric: tabular-nums; }
       .good .amt { color: var(--good); }
       .bad .amt { color: var(--bad); }
+      /* The base civilization's one line. Nothing to colour: it is the row
+         saying that nothing has been changed. */
+      .card li.plain { color: var(--muted); font-style: italic; }
 
       .seats { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
       .seats button { flex: none; padding: 0.4rem 0.9rem; font-size: 0.85rem; }
@@ -221,6 +317,12 @@
       button.rr { cursor: pointer; }
       button.rr:disabled { cursor: default; }
       .rr .who { color: var(--muted); }
+      /* Who is in the seat, beside which seat it is: in a balanced room the
+         colour decides which column of numbers you play under, and in any
+         room the rating is what the result will move. */
+      .rr .nm { color: var(--text); font-weight: 600; }
+      .rr .nm .rating { color: var(--gold); font-weight: 400;
+                        font-variant-numeric: tabular-nums; }
       .rr .st { margin-left: auto; font-weight: 600; }
       /* Three states: settled, still deciding, nobody there. The button keeps
          its colour once pressed - that is the whole confirmation it gives. */
@@ -250,11 +352,60 @@
         position: absolute; top: 0.75rem; right: 0.75rem; display: flex; gap: 0.4rem;
       }
       #game-bar button { padding: 0.4rem 0.7rem; font-size: 0.8rem; }
-      #civ-legend {
-        display: none; position: absolute; right: 0.75rem; bottom: 0.75rem;
+      /* One box per side per kind. Left and right say what the box is about
+         (economy, pieces); top and bottom say whose it is, following the
+         board's own orientation, so the pair nearest you is always yours.
+         Kept clear of the corners: precise is top left, resign and exit are
+         top right, and the canvas draws the ping bottom left. */
+      .civ-panel {
+        display: none; position: absolute;
         background: rgba(36,26,18,0.86); border: 1px solid var(--wood-line);
         border-radius: 6px; padding: 0.45rem 0.6rem; font-size: 0.72rem;
-        max-width: min(15rem, 45vw); pointer-events: none;
+        width: min(13rem, 26vw); max-height: 36vh; overflow-y: auto;
+        pointer-events: none;
+      }
+      .civ-panel.left { left: 0.75rem; }
+      .civ-panel.right { right: 0.75rem; }
+      .civ-panel.far { top: 3.1rem; }
+      .civ-panel.near { bottom: 3.1rem; }
+      /* Whose box this is, in the box, because a player who has flipped the
+         board should not have to work out which end they are looking at. */
+      .civ-panel .lg-owner {
+        color: var(--gold); font-weight: 600; margin-bottom: 0.15rem;
+      }
+      /* Who is playing, at the end of the board they play from. Centred: the
+         corners are spoken for and the mana bars own the edges of the board. */
+      .plate {
+        display: none; position: absolute; left: 50%;
+        transform: translateX(-50%);
+        background: rgba(36,26,18,0.86); border: 1px solid var(--wood-line);
+        border-radius: 999px; padding: 0.15rem 0.7rem; font-size: 0.72rem;
+        white-space: nowrap; pointer-events: none; max-width: 66%;
+        overflow: hidden; text-overflow: ellipsis;
+      }
+      .plate.far { top: 0.35rem; }
+      .plate.near { bottom: 0.35rem; }
+      .plate .side { color: var(--muted); }
+      .plate .rating { color: var(--gold); font-variant-numeric: tabular-nums; }
+      .plate .you { color: var(--gold); }
+      .civ-panel .lg-title {
+        color: var(--gold); text-transform: uppercase; letter-spacing: 0.08em;
+        font-size: 0.66rem; margin-bottom: 0.3rem;
+      }
+      .civ-panel .lg-none { color: var(--muted); font-style: italic; }
+      /* Portrait phones have no room beside the board: the two panels would sit
+         on top of the pieces. Half width each, along the bottom, above the bar
+         the canvas draws there. */
+      /* Portrait phones have no room beside the board: half width each, and
+         the four boxes shrink rather than moving, so the two ends still mean
+         what they mean. */
+      @media (max-width: 700px) {
+        .civ-panel {
+          width: calc(50% - 1rem); max-height: 22vh; font-size: 0.62rem;
+        }
+        .civ-panel.far { top: 2.6rem; }
+        .civ-panel.near { bottom: 2.6rem; }
+        .plate { font-size: 0.66rem; }
       }
       .lg-side { color: var(--muted); }
       .lg-side + .lg-side { margin-top: 0.4rem; }
@@ -280,18 +431,41 @@
         font-size: 1.15rem; margin-bottom: 0.6rem; color: var(--gold);
         font-family: Georgia, "Palatino Linotype", serif;
       }
+      /* A strip along the bottom, full width, that the canvas gives room to
+         (#game.replaying below). It used to float over the board on 95vw,
+         which on a phone sat squarely on the lower mana bar and pushed its own
+         controls off the side. */
       #replay-bar {
-        display: none; position: absolute; left: 50%; bottom: 1rem;
-        transform: translateX(-50%); align-items: center; gap: 0.5rem;
-        background: rgba(36,26,18,0.94); border: 1px solid var(--wood-line);
-        padding: 0.5rem 0.7rem; border-radius: 8px;
-        max-width: 95vw;
+        display: none; position: absolute; left: 0; right: 0; bottom: 0;
+        height: var(--replay-bar-h); box-sizing: border-box;
+        align-items: center; gap: 0.4rem;
+        background: var(--wood-dark); border-top: 1px solid var(--wood-line);
+        padding: 0 0.6rem;
       }
-      #replay-bar button { padding: 0.35rem 0.55rem; font-size: 0.8rem; }
-      #replay-bar button.on { background: #7a5220; border-color: var(--gold); }
-      #rp-seek { width: min(40vw, 16rem); accent-color: var(--gold); }
+      /* Big enough to hit with a thumb, and a fixed width so stepping through
+         the speeds does not shuffle the row sideways. */
+      #replay-bar button {
+        flex: none; padding: 0.4rem 0.5rem; font-size: 0.85rem;
+        min-width: 2.6rem; line-height: 1.2;
+      }
+      #rp-speed {
+        min-width: 3.4rem; font-variant-numeric: tabular-nums;
+        border-color: var(--gold); color: var(--gold);
+      }
+      #rp-speed.paused { background: #7a5220; color: #fdf3dc; }
+      #rp-exit { min-width: 0; margin-left: 0.2rem; }
+      #rp-seek {
+        flex: 1; min-width: 3rem; accent-color: var(--gold);
+        height: 1.75rem; margin: 0;
+      }
       #rp-time { font-size: 0.78rem; color: var(--muted);
                  font-variant-numeric: tabular-nums; white-space: nowrap; }
+      /* Narrow phones: the clock is the first thing to go. The position is
+         already on the slider, and the controls are what have to be hittable. */
+      @media (max-width: 26rem) {
+        #rp-time { display: none; }
+        #replay-bar { gap: 0.3rem; padding: 0 0.4rem; }
+      }
 
       /* Tabs. `hidden` needs the explicit rule because .tab sets a display. */
       /* min-width lets the nav shrink and scroll instead of pushing the last
@@ -311,7 +485,10 @@
         border-bottom: 2px solid var(--gold);
       }
       .tab { display: flex; flex-direction: column; gap: 1.1rem; }
-      .tab[hidden] { display: none; }
+      /* Any explicit `display` beats the hidden attribute, and most things
+         here are flex, so hiding one by setting el.hidden silently does
+         nothing. This has to outrank them all, hence !important. */
+      [hidden] { display: none !important; }
 
       /* Rules: prose, so it gets a reading measure and real paragraphs. */
       .rules h3 {
@@ -337,10 +514,46 @@
       .match button { flex: none; padding: 0.35rem 0.6rem; font-size: 0.78rem; }
       .match .gone { flex: none; color: var(--muted); font-size: 0.75rem; }
 
+      /* A key binding. Shaped like the inputs above it because it is one:
+         the button is both the control and the value it holds. */
+      .keybind {
+        width: 100%; padding: 0.6rem; border-radius: 5px; font-size: 1rem;
+        border: 1px solid var(--wood-line); background: #241a12;
+        color: var(--text); text-align: center; letter-spacing: 0.05em;
+      }
+      .keybind.listening {
+        border-color: var(--gold); color: var(--gold); background: #2e2114;
+      }
+
       .opts { display: flex; flex-direction: column; gap: 0.6rem; }
       .opts .check { display: flex; align-items: center; gap: 0.5rem; }
       .opts .check input { width: auto; accent-color: var(--gold); }
       .opts .check label { margin: 0; color: var(--text); font-size: 0.85rem; }
+
+      /* Account and ratings */
+      .note.warn {
+        border-left: 3px solid var(--gold);
+        padding-left: 0.7rem;
+      }
+      .ratings { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.6rem 0; }
+      .ratings .rating {
+        border: 1px solid var(--wood-line);
+        border-radius: 6px;
+        padding: 0.4rem 0.7rem;
+        min-width: 5.5rem;
+      }
+      .ratings .rating .mode {
+        display: block; font-size: 0.7rem; text-transform: uppercase;
+        letter-spacing: 0.06em; opacity: 0.7;
+      }
+      .ratings .rating .value { font-size: 1.15rem; }
+      .ratings .rating .games { font-size: 0.7rem; opacity: 0.7; }
+      .ratings .rating.unplayed .value { opacity: 0.45; }
+      .match .delta { font-variant-numeric: tabular-nums; margin-left: 0.4rem; }
+      .match .delta.up { color: var(--good-lit); }
+      .match .delta.down { color: var(--bad-lit); }
+      #pg-rating { font-size: 0.9rem; opacity: 0.85; margin-top: 0.3rem; }
+      #pg-rematch { font-size: 0.9rem; color: var(--gold); margin-top: 0.3rem; }
     </style>
   </head>
   <body>
@@ -354,6 +567,10 @@
             <button data-tab="rules">Rules</button>
             <button data-tab="profile">Profile</button>
           </nav>
+          <!-- Whether you are signed in decides whether a game counts, so it
+               belongs where it is always visible rather than one tab away.
+               It is the way to the profile as well as the report of it. -->
+          <button id="whoami" class="whoami">Not signed in</button>
         </div>
       </header>
 
@@ -365,18 +582,25 @@
         </p>
         <section class="panel">
           <h2>Start a game</h2>
-          <button id="btn-quick">Quick match</button>
-          <button id="btn-create">Create room</button>
-          <div class="line">
-            <button id="btn-solo">Solo practice</button>
-            <span class="help" tabindex="0" role="note"
-                  aria-label="What solo practice is"
-                  data-tip="Both sides are yours, with a civilization chosen for
-                            each. Nobody else can join, and you can move either
-                            colour.">?</span>
+          <!-- Quick match asks for one thing, so it has to say what that
+               thing is. Three buttons rather than one, because the tempo was
+               otherwise whatever the create screen had last been left on. -->
+          <div class="quick">
+            <span class="qlabel">Quick match</span>
+            <div id="quick-bar" class="segmented">
+              <button data-tempo="bullet">Bullet</button>
+              <button data-tempo="rapid">Rapid</button>
+              <button data-tempo="slow">Slow</button>
+            </div>
           </div>
+          <p class="note" id="quick-note">
+            Pairs you with the next player who picks the same tempo. Standard
+            settings both ways, so the game is rated if you are both signed in.
+          </p>
+          <button id="btn-create">Create a game</button>
+          <button id="btn-find">Find a game</button>
           <div class="row join">
-            <button id="btn-join">Join</button>
+            <button id="btn-join">Join by code</button>
             <input id="room-code" maxlength="4" spellcheck="false"
                    placeholder="ABCD" aria-label="Room code"
                    style="text-transform: uppercase" />
@@ -385,106 +609,21 @@
         </section>
 
         <section class="panel">
-          <h2>Tempo<span class="help inline" tabindex="0" role="note"
-                aria-label="Where the tempo applies"
-                data-tip="Applies to a room you open. Joining a room uses that
-                          room's tempo instead.">?</span></h2>
-          <div id="tempo-bar" class="segmented">
-            <button data-mode="bullet" class="on">Bullet</button>
-            <button data-mode="rapid">Rapid</button>
-            <button data-mode="slow">Slow</button>
-            <button data-mode="custom">Custom</button>
-          </div>
-          <p class="note" id="mode-note"></p>
-        </section>
-
-        <section class="panel">
-          <h2>What players can see</h2>
-          <p class="note">
-            Set by whoever opens the room and applied to both sides. Hidden
-            information is never sent to either client, so it cannot be read out
-            of the connection.
-          </p>
-          <div class="opts">
-            <div class="check">
-              <input id="v-mana" type="checkbox" data-view="enemy_mana" />
-              <label for="v-mana">Opponent's mana</label>
-            </div>
-            <div class="check">
-              <input id="v-prep" type="checkbox" data-view="enemy_prep" />
-              <label for="v-prep">Opponent's preparation (a move about to start)</label>
-            </div>
-            <div class="check">
-              <input id="v-cool" type="checkbox" data-view="enemy_cooldown" />
-              <label for="v-cool">Opponent's cooldowns</label>
-            </div>
-            <div class="check">
-              <input id="v-dest" type="checkbox" data-view="enemy_dest" />
-              <label for="v-dest">Where opponent's moves are headed</label>
-            </div>
-          </div>
-        </section>
-
-        <section class="panel">
-          <h2>Movement parameters</h2>
-          <p class="note">
-            The tempo presets set these. Editing one switches the tempo to
-            Custom, and a custom room is never rated.
-          </p>
-          <div class="params">
-            <div>
-              <label for="p-refill">Mana / sec</label>
-              <input id="p-refill" data-param="mana_refill_rate" type="number"
-                     step="0.05" value="0.3" />
-            </div>
-            <div>
-              <label for="p-max">Max mana</label>
-              <input id="p-max" data-param="maximum_mana" type="number"
-                     step="0.5" value="5" />
-            </div>
-            <div>
-              <label for="p-prep">Prep (s)</label>
-              <input id="p-prep" data-param="preparation_period" type="number"
-                     step="0.1" value="0.5" />
-            </div>
-            <div>
-              <label for="p-cool">Cooldown (s)</label>
-              <input id="p-cool" data-param="cooldown" type="number"
-                     step="0.1" value="0.8" />
-            </div>
-            <div>
-              <label for="p-speed">Speed</label>
-              <input id="p-speed" data-param="movement_speed" type="number"
-                     step="0.5" value="4" />
-            </div>
-            <div>
-              <label for="p-freedom">Freedom (deg)</label>
-              <input id="p-freedom" data-param="movement_freedom_deg" type="number"
-                     step="1" value="5" />
-            </div>
-            <div>
-              <label for="p-base-cost">Move cost</label>
-              <input id="p-base-cost" data-param="base_move_cost" type="number"
-                     step="0.1" value="1" />
-            </div>
-            <div>
-              <label for="p-dist-cost">Cost / distance</label>
-              <input id="p-dist-cost" data-param="distance_cost" type="number"
-                     step="0.05" value="0.2" />
-            </div>
-            <div>
-              <label for="p-size">Piece size</label>
-              <input id="p-size" data-param="diameter_piece" type="number"
-                     step="0.05" value="0.6" />
-            </div>
-          </div>
+          <h2>Who is online</h2>
+          <p class="note" id="online-count">Not connected.</p>
+          <div id="online-list" class="online"></div>
         </section>
       </section>
 
       <section id="tab-settings" class="tab" hidden>
         <section class="panel">
           <h2>Your controls</h2>
-          <p class="note">Personal. Saved on this device and sent to nobody.</p>
+          <p class="note">
+            Personal, and never shown to another player. Saved on this device.
+            While you are signed in they are saved to your account as well, and
+            the account's copy is the one you get when you sign in on another
+            device. Sign out and this device's own settings come back.
+          </p>
           <div class="opts">
             <div>
               <label for="s-movemode">Moving a piece</label>
@@ -503,18 +642,25 @@
               <label for="s-hints">Show move hints</label>
             </div>
             <div>
-              <label for="s-precise">Precise key</label>
-              <select id="s-precise">
-                <option value="Shift">Shift</option>
-                <option value="Control">Control</option>
-                <option value="Alt">Alt</option>
-              </select>
+              <label for="s-precise">Precise key (hold)</label>
+              <button id="s-precise" class="keybind" type="button"
+                      aria-label="Precise key. Press to change.">Shift</button>
             </div>
             <p class="note">
               A drag shorter than the threshold selects the piece instead of
               moving it, which is what makes a very short move hard to issue.
               Holding the precise key, or pressing Precise on the board for a
               touchscreen, lets any distance count and brightens the hints.
+              The unselect key puts a selected piece down without moving it.
+            </p>
+            <div>
+              <label for="s-unselect">Unselect key (put the piece down)</label>
+              <button id="s-unselect" class="keybind" type="button"
+                      aria-label="Unselect key. Press to change.">Esc</button>
+            </div>
+            <p class="note" id="s-keys-note">
+              Press one of these, then press the key you want. Any key on the
+              keyboard except Tab, which the page needs to stay navigable.
             </p>
           </div>
         </section>
@@ -682,20 +828,275 @@
       </section>
 
       <section id="tab-profile" class="tab" hidden>
+        <section class="panel" id="pf-signed-out">
+          <h2>Account</h2>
+          <p class="note">
+            An account gives you a rating and finds your games from any
+            browser. Every game is recorded either way. Playing without an
+            account works exactly as before, and always will.
+          </p>
+          <div class="row">
+            <input id="ac-name" maxlength="20" spellcheck="false"
+                   autocomplete="username" placeholder="Name"
+                   aria-label="Account name" />
+            <input id="ac-pass" type="password" maxlength="128"
+                   autocomplete="current-password" placeholder="Password"
+                   aria-label="Password" />
+          </div>
+          <div class="row">
+            <button id="btn-signin">Sign in</button>
+            <button id="btn-signup">Create account</button>
+          </div>
+          <div id="ac-status"></div>
+          <p class="note warn" id="ac-warning">
+            <strong>Please use a password you use nowhere else.</strong>
+            This is a hobby project. Passwords are hashed with argon2id and no
+            email address is collected, but the security here has not been
+            reviewed by anyone and comes with no guarantee. There is also no
+            password reset: if you lose it, the account is gone.
+          </p>
+        </section>
+
+        <section class="panel" id="pf-signed-in" hidden>
+          <h2>Account</h2>
+          <p class="lede" id="pf-name"></p>
+          <div id="pf-ratings" class="ratings"></div>
+          <p class="note">
+            A game is rated when both players are signed in, the tempo is
+            Bullet, Rapid or Slow, and nobody has changed what players can see.
+            Solo games and custom settings are never rated.
+          </p>
+          <button id="btn-signout">Sign out</button>
+        </section>
+
         <section class="panel">
           <h2>Match history</h2>
           <p class="note" id="pf-summary"></p>
           <div id="pf-list"></div>
-          <p class="note">
-            Results are kept in this browser. A replay is the snapshots the
-            server sent, held in memory, so it lasts as long as this tab stays
-            open: reloading keeps the result and loses the recording. Nothing
-            is stored on the server, and there are no accounts yet.
-          </p>
+          <div class="pager" id="pf-pager" hidden>
+            <button id="pf-prev">Newer</button>
+            <span id="pf-range"></span>
+            <button id="pf-next">Older</button>
+          </div>
+          <p class="note" id="pf-storage-note"></p>
           <button id="btn-clear-history">Clear history</button>
         </section>
       </section>
       </div>
+    </div>
+
+    <!-- A player's public card, over whatever screen you were on. A peek from
+         the online list should not cost you your place. -->
+    <div id="player-card" hidden>
+      <div class="pc-inner">
+        <h2 id="pc-name"></h2>
+        <div id="pc-ratings" class="ratings"></div>
+        <p class="note" id="pc-note"></p>
+        <div id="pc-list"></div>
+        <div class="pager" id="pc-pager" hidden>
+          <button id="pc-prev">Newer</button>
+          <span id="pc-range"></span>
+          <button id="pc-next">Older</button>
+        </div>
+        <button id="pc-close">Close</button>
+      </div>
+    </div>
+
+    <div id="create">
+      <h1>New game</h1>
+      <p class="lede">
+        These are the rules of the game you are about to open. Whoever joins
+        plays under them and is shown them before they press Ready.
+      </p>
+
+      <section class="panel">
+        <h2>Who can join</h2>
+        <div id="who-bar" class="segmented">
+          <button data-who="open" class="on">Anyone</button>
+          <button data-who="code">Invite code</button>
+          <button data-who="solo">Just me</button>
+        </div>
+        <p class="note" id="who-note"></p>
+      </section>
+
+      <section class="panel">
+        <h2>Tempo</h2>
+        <div id="tempo-bar" class="segmented">
+          <button data-mode="bullet" class="on">Bullet</button>
+          <button data-mode="rapid">Rapid</button>
+          <button data-mode="slow">Slow</button>
+          <button data-mode="custom">Custom</button>
+        </div>
+        <p class="note" id="mode-note"></p>
+      </section>
+
+      <section class="panel">
+        <h2>What players can see</h2>
+        <p class="note">
+          Applied to both sides. Hidden information is never sent to either
+          client, so it cannot be read out of the connection.
+        </p>
+        <div class="opts">
+          <div class="check">
+            <input id="v-mana" type="checkbox" data-view="enemy_mana" />
+            <label for="v-mana">Opponent's mana</label>
+          </div>
+          <div class="check">
+            <input id="v-prep" type="checkbox" data-view="enemy_prep" />
+            <label for="v-prep">Opponent's preparation (a move about to start)</label>
+          </div>
+          <div class="check">
+            <input id="v-cool" type="checkbox" data-view="enemy_cooldown" />
+            <label for="v-cool">Opponent's cooldowns</label>
+          </div>
+          <div class="check">
+            <input id="v-dest" type="checkbox" data-view="enemy_dest" />
+            <label for="v-dest">Where opponent's moves are headed</label>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Rating</h2>
+        <div class="opts">
+          <div class="check">
+            <input id="unrated-on" type="checkbox" />
+            <label for="unrated-on">Do not rate this game</label>
+          </div>
+        </div>
+        <p class="note" id="rated-note"></p>
+      </section>
+
+      <section class="panel">
+        <h2>Balanced mode</h2>
+        <div class="opts">
+          <div class="check">
+            <input id="bal-on" type="checkbox" />
+            <label for="bal-on">Give the two sides different settings</label>
+          </div>
+        </div>
+        <p class="note">
+          A handicap: hand one player faster mana, a shorter cooldown or
+          quicker pieces to even out a difference in skill. Both columns are
+          shown to whoever joins, so nobody sits down into a weakened seat
+          without seeing it. Balanced games are never rated.
+        </p>
+      </section>
+
+      <section class="panel">
+        <h2>Movement parameters</h2>
+        <p class="note">
+          The tempo presets set these. Editing one switches the tempo to
+          Custom, and a custom room is never rated.
+        </p>
+        <p class="note bal-legend" hidden>
+          Two boxes per row: <b class="sw-w">White</b> on the left,
+          <b class="sw-b">Black</b> on the right.
+        </p>
+        <div class="params" id="param-grid">
+          <div>
+            <label for="p-refill">Mana / sec</label>
+            <div class="pair">
+              <input id="p-refill" data-param="mana_refill_rate" data-seat="white"
+                     type="number" step="0.05" value="0.3" aria-label="White mana per second" />
+              <input id="pb-refill" data-param="mana_refill_rate" data-seat="black"
+                     type="number" step="0.05" value="0.3" aria-label="Black mana per second" />
+            </div>
+          </div>
+          <div>
+            <label for="p-max">Max mana</label>
+            <div class="pair">
+              <input id="p-max" data-param="maximum_mana" data-seat="white"
+                     type="number" step="0.5" value="5" aria-label="White maximum mana" />
+              <input id="pb-max" data-param="maximum_mana" data-seat="black"
+                     type="number" step="0.5" value="5" aria-label="Black maximum mana" />
+            </div>
+          </div>
+          <div>
+            <label for="p-prep">Prep (s)</label>
+            <div class="pair">
+              <input id="p-prep" data-param="preparation_period" data-seat="white"
+                     type="number" step="0.1" value="0.5" aria-label="White preparation period" />
+              <input id="pb-prep" data-param="preparation_period" data-seat="black"
+                     type="number" step="0.1" value="0.5" aria-label="Black preparation period" />
+            </div>
+          </div>
+          <div>
+            <label for="p-cool">Cooldown (s)</label>
+            <div class="pair">
+              <input id="p-cool" data-param="cooldown" data-seat="white"
+                     type="number" step="0.1" value="0.8" aria-label="White cooldown" />
+              <input id="pb-cool" data-param="cooldown" data-seat="black"
+                     type="number" step="0.1" value="0.8" aria-label="Black cooldown" />
+            </div>
+          </div>
+          <div>
+            <label for="p-speed">Speed</label>
+            <div class="pair">
+              <input id="p-speed" data-param="movement_speed" data-seat="white"
+                     type="number" step="0.5" value="4" aria-label="White movement speed" />
+              <input id="pb-speed" data-param="movement_speed" data-seat="black"
+                     type="number" step="0.5" value="4" aria-label="Black movement speed" />
+            </div>
+          </div>
+          <div>
+            <label for="p-freedom">Freedom (deg)</label>
+            <div class="pair">
+              <input id="p-freedom" data-param="movement_freedom_deg" data-seat="white"
+                     type="number" step="1" value="5" aria-label="White direction freedom" />
+              <input id="pb-freedom" data-param="movement_freedom_deg" data-seat="black"
+                     type="number" step="1" value="5" aria-label="Black direction freedom" />
+            </div>
+          </div>
+          <div>
+            <label for="p-base-cost">Move cost</label>
+            <div class="pair">
+              <input id="p-base-cost" data-param="base_move_cost" data-seat="white"
+                     type="number" step="0.1" value="1" aria-label="White base move cost" />
+              <input id="pb-base-cost" data-param="base_move_cost" data-seat="black"
+                     type="number" step="0.1" value="1" aria-label="Black base move cost" />
+            </div>
+          </div>
+          <div>
+            <label for="p-dist-cost">Cost / distance</label>
+            <div class="pair">
+              <input id="p-dist-cost" data-param="distance_cost" data-seat="white"
+                     type="number" step="0.05" value="0.2" aria-label="White distance cost" />
+              <input id="pb-dist-cost" data-param="distance_cost" data-seat="black"
+                     type="number" step="0.05" value="0.2" aria-label="Black distance cost" />
+            </div>
+          </div>
+          <div>
+            <label for="p-size">Piece size</label>
+            <div class="pair">
+              <input id="p-size" data-param="diameter_piece" data-seat="white"
+                     type="number" step="0.05" value="0.6" aria-label="White piece size" />
+              <input id="pb-size" data-param="diameter_piece" data-seat="black"
+                     type="number" step="0.05" value="0.6" aria-label="Black piece size" />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="row screen-buttons">
+        <button id="btn-create-go" class="primary">Create game</button>
+        <button id="btn-create-back">Back</button>
+      </div>
+      <div id="create-status"></div>
+    </div>
+
+    <div id="find">
+      <h1>Open games</h1>
+      <p class="lede">
+        Games somebody has opened and is waiting in. Joining takes you straight
+        to their pre-game screen, where you pick a civilization.
+      </p>
+      <div class="row screen-buttons">
+        <button id="btn-find-refresh" class="primary">Refresh</button>
+        <button id="btn-find-back">Back</button>
+      </div>
+      <div id="find-list"></div>
+      <div id="find-status"></div>
     </div>
 
     <div id="pregame">
@@ -708,14 +1109,18 @@
            a long scroll. Your own half is the button itself: pressing it is
            what changes it, so the control and the state are one thing. -->
       <div id="pg-ready">
-        <button class="rr" id="rr-me"><span class="who"></span><span class="st"></span></button>
-        <div class="rr" id="rr-them"><span class="who"></span><span class="st"></span></div>
+        <button class="rr" id="rr-me"><span class="who"></span><span class="nm"></span><span class="st"></span></button>
+        <div class="rr" id="rr-them"><span class="who"></span><span class="nm"></span><span class="st"></span></div>
       </div>
       <div id="pg-seats" class="seats" style="display: none">
         <span class="note">Choosing for</span>
         <button id="seat-white" class="on">White</button>
         <button id="seat-black">Black</button>
       </div>
+      <!-- What this room actually is, from the server, before anyone readies.
+           A balanced room can hand you the weaker seat, so the terms are shown
+           rather than merely applied. -->
+      <div id="pg-terms"></div>
       <div id="civ-cards" class="cards"></div>
       <div id="pg-buttons">
         <button id="btn-pg-exit">Exit to lobby</button>
@@ -729,25 +1134,45 @@
       <button id="btn-precise" title="Any drag distance counts as a move">Precise</button>
       <!-- Bottom right: the free corner. Precise has the top left, resign and
            exit the top right, and the canvas draws the ping bottom left. -->
-      <div id="civ-legend"></div>
+      <!-- Both sides' civilizations while the game runs, one box per side per
+           kind: economy on the left, pieces on the right, and each side's pair
+           at that side's own end of the board. Which end is which follows the
+           board's orientation, so "near" is always yours, flipped or not. -->
+      <div id="civ-econ-near" class="civ-panel near left"></div>
+      <div id="civ-pieces-near" class="civ-panel near right"></div>
+      <div id="civ-econ-far" class="civ-panel far left"></div>
+      <div id="civ-pieces-far" class="civ-panel far right"></div>
+      <!-- Who is playing, at the end of the board they are playing from. -->
+      <div id="plate-far" class="plate far"></div>
+      <div id="plate-near" class="plate near"></div>
       <div id="game-bar">
         <button id="btn-resign" class="danger">Resign</button>
         <button id="btn-exit">Exit to lobby</button>
       </div>
       <div id="postgame">
         <div id="pg-result"></div>
+        <div id="pg-rating"></div>
+        <!-- A rematch takes both players, so this says which half has asked. -->
+        <div id="pg-rematch"></div>
         <div class="row">
           <button id="btn-rematch" class="primary">Rematch</button>
           <button id="btn-replay">Watch replay</button>
           <button id="btn-newgame">Exit to lobby</button>
         </div>
       </div>
+<!-- Three controls, not a row of speeds: back, the current tempo, forward.
+           The tempo button is also pause, because a tempo of zero is what pause
+           means here. The bar is a strip the board makes room for rather than
+           something laid over it - over it, it covered the very mana bar the
+           replay exists to show. -->
       <div id="replay-bar">
-        <button id="rp-play">&#10106;&#10106;</button>
-        <span id="rp-speeds"></span>
-        <input id="rp-seek" type="range" min="0" max="1000" value="0" />
+        <button id="rp-slower" title="Slower, then backwards">&#9664;</button>
+        <button id="rp-speed" title="Pause">1&#215;</button>
+        <button id="rp-faster" title="Faster">&#9654;</button>
+        <input id="rp-seek" type="range" min="0" max="1000" value="0"
+               aria-label="Position in the replay" />
         <span id="rp-time"></span>
-        <button id="rp-exit">Close replay</button>
+        <button id="rp-exit">Close</button>
       </div>
     </div>
 

@@ -5,12 +5,14 @@ is how the room layer gets verified.
     python -m tools.fake_client --pair              # two clients, one game
     python -m tools.fake_client --pair --rooms 3    # concurrent rooms
     python -m tools.fake_client --hostile           # abuse checks
+    python -m tools.fake_client --accounts          # sign in, rated game
 """
 
 import argparse
 import asyncio
 import json
 import random
+import secrets
 import sys
 
 import websockets
@@ -99,7 +101,9 @@ class FakeClient:
             elif action == "join":
                 await self.send({"type": protocol.JOIN_ROOM, "code": code})
             elif action == "quick":
-                await self.send({"type": protocol.QUICK_MATCH, "params": {}})
+                # A tempo name, not params: the server builds the room from
+                # its own presets so both players know what they agreed to.
+                await self.send({"type": protocol.QUICK_MATCH, "tempo": "bullet"})
 
             reader = asyncio.create_task(self._read())
             mover = asyncio.create_task(self._move_loop())
@@ -191,6 +195,28 @@ async def _ready(ws) -> None:
     """Confirm a seat. Rooms no longer start until both sides have."""
     await ws.send(json.dumps({"type": protocol.SET_READY, "ready": True,
                               "civ": None}))
+
+
+async def _await_state(ws, matches, timeout: float) -> dict | None:
+    """Read until a ROOM_STATE `matches` describes, or give up.
+
+    A socket that has been sitting in a room has several older ROOM_STATEs
+    queued from the readying that started the game, so "the next ROOM_STATE"
+    is not the one a button press produced. Reading up to the state that shows
+    the effect being tested skips those, and a test whose effect never arrives
+    fails on a None rather than passing on a stale message - which is how the
+    old rematch check passed while asserting the opposite of what it meant.
+    """
+    async def pump():
+        async for raw in ws:
+            msg = json.loads(raw)
+            if msg.get("type") == protocol.ROOM_STATE and matches(msg):
+                return msg
+        return None
+    try:
+        return await asyncio.wait_for(pump(), timeout=timeout)
+    except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
+        return None
 
 
 async def _await_msg(ws, kinds: set[str], timeout: float) -> dict | None:
@@ -290,11 +316,58 @@ async def run_rejoin(url: str, grace: float) -> list[tuple[str, bool, str]]:
     return results
 
 
+async def run_lobby_seat(url: str, grace: float) -> list[tuple[str, bool, str]]:
+    """A seat left empty in the lobby comes back to the room.
+
+    The seat used to be held by its token for as long as the room lived, which
+    is right while a game is being played and wrong once it is not. A player
+    whose phone slept lost the token with the page, so their own reservation
+    answered "room is full" while the player still waiting was told "not here
+    yet" forever.
+
+    Inside the grace window the seat is still theirs - that is what makes a
+    reload work - so both halves are checked here.
+    """
+    results = []
+    async with _connect(url) as host:
+        await host.send(json.dumps({"type": protocol.CREATE_ROOM, "params": {}}))
+        created = await _await_msg(host, {protocol.ROOM_CREATED}, 5)
+        code = created["code"]
+
+        guest = await _connect(url)
+        await guest.send(json.dumps({"type": protocol.JOIN_ROOM, "code": code}))
+        joined = await _await_msg(guest, {protocol.ROOM_JOINED}, 5)
+        await guest.close()
+
+        # Straight away the seat is still held, or a reload could not reclaim it.
+        async with _connect(url) as early:
+            await early.send(json.dumps({"type": protocol.JOIN_ROOM, "code": code}))
+            reply = await _await_msg(early, {protocol.ROOM_JOINED, protocol.ERROR}, 5)
+            results.append(("the seat is held during the grace window",
+                            reply is not None and reply.get("type") == protocol.ERROR,
+                            str(reply.get("reason") if reply else "no reply")))
+
+        await asyncio.sleep(grace + 1.5)
+
+        async with _connect(url) as late:
+            await late.send(json.dumps({"type": protocol.JOIN_ROOM, "code": code}))
+            reply = await _await_msg(late, {protocol.ROOM_JOINED, protocol.ERROR}, 5)
+            results.append(("the seat is free once the grace window passes",
+                            reply is not None
+                            and reply.get("type") == protocol.ROOM_JOINED,
+                            str(reply.get("reason") if reply else "no reply")))
+            results.append(("the same colour is handed out again",
+                            reply is not None and reply.get("color") == joined["color"],
+                            f"{joined['color']} -> {reply.get('color') if reply else '-'}"))
+    return results
+
+
 async def run_rematch(url: str) -> list[tuple[str, bool, str]]:
     """Finish a game by resigning, then play the same room again.
 
-    The second REMATCH is the interesting one: both players press the button,
-    so it lands on a room already back in the lobby and must not come back as
+    A rematch takes both players, like readying up: one press must not drag
+    the other player off the result they are still reading. The press after
+    that lands on a room already back in the lobby, and must not come back as
     an error on the slower player's screen.
     """
     results = []
@@ -321,20 +394,39 @@ async def run_rematch(url: str) -> list[tuple[str, bool, str]]:
         results.append(("resign ends it", over is not None and over.get("game_over"),
                         f"winner={over.get('winner') if over else 'none'}"))
 
-        # Whoever presses first puts the room back in the lobby.
+        # One press is an offer, not a decision. Read up to the state that
+        # records it: if the press reopened the room instead, the flag was
+        # cleared by the reset and no such state ever arrives.
         await host.send(json.dumps({"type": protocol.REMATCH}))
-        back = await _await_msg(guest, {protocol.ROOM_STATE}, 5)
-        results.append(("rematch reopens the room",
+        asked = await _await_state(
+            guest, lambda s: s.get("seats", {}).get("white", {}).get("rematch"), 5)
+        seats = (asked or {}).get("seats", {})
+        results.append(("one press does not reopen the room",
+                        asked is not None and asked.get("waiting") is False,
+                        f"waiting={asked.get('waiting') if asked else 'none'}"))
+        results.append(("the asking seat is the only one marked",
+                        seats.get("white", {}).get("rematch") is True
+                        and seats.get("black", {}).get("rematch") is False,
+                        f"seats={ {c: s.get('rematch') for c, s in seats.items()} }"))
+
+        # The second press is the agreement, and reopens the room.
+        await guest.send(json.dumps({"type": protocol.REMATCH}))
+        back = await _await_state(guest, lambda s: s.get("waiting") is True, 5)
+        results.append(("both presses reopen the room",
                         back is not None and back.get("waiting") is True,
                         f"waiting={back.get('waiting') if back else 'none'}"))
         results.append(("readiness is cleared",
                         back is not None and not any(back.get("ready", {}).values()),
                         f"ready={back.get('ready') if back else 'none'}"))
+        results.append(("the rematch flags are cleared",
+                        back is not None and not any(
+                            s.get("rematch") for s in back.get("seats", {}).values()),
+                        f"seats={back.get('seats') if back else 'none'}"))
 
-        # The second press arrives at a room that is already in the lobby.
+        # A third press arrives at a room that is already in the lobby.
         await guest.send(json.dumps({"type": protocol.REMATCH}))
         echo = await _await_msg(guest, {protocol.ROOM_STATE, protocol.ERROR}, 5)
-        results.append(("second rematch is not an error",
+        results.append(("a press at an open room is not an error",
                         echo is not None and echo.get("type") == protocol.ROOM_STATE,
                         f"got={echo.get('type') if echo else 'none'}"
                         f" {echo.get('reason', '') if echo else ''}"))
@@ -343,6 +435,194 @@ async def run_rematch(url: str) -> list[tuple[str, bool, str]]:
         await _ready(guest)
         results.append(("second game starts",
                         await _await_msg(host, {protocol.GAME_STATE}, 8) is not None, ""))
+        await guest.close()
+    return results
+
+
+async def run_accounts(url: str) -> list[tuple[str, bool, str]]:
+    """Two signed-in players finish a rated game and both ratings move.
+
+    The only test that covers the whole chain at once: sign-up, the identity
+    riding on the seat, the standard tempo making the game ratable, the save
+    off the game loop, and the RATING_UPDATE that follows it. Requires the
+    server to have a database; without one it reports that and passes nothing.
+    """
+    results = []
+    tag = secrets.token_hex(3)
+    rapid = {"mana_refill_rate": 0.15, "maximum_mana": 5.0, "base_move_cost": 1.0,
+             "distance_cost": 0.2, "preparation_period": 0.5, "cooldown": 1.3,
+             "movement_speed": 2.0, "movement_freedom_deg": 5.0,
+             "diameter_piece": 0.6}
+
+    async def sign_up(ws, name):
+        await ws.send(json.dumps({"type": protocol.SIGN_UP, "name": name,
+                                  "password": "a test password"}))
+        return await _await_msg(ws, {protocol.AUTH_STATE, protocol.AUTH_ERROR}, 10)
+
+    async with _connect(url) as host:
+        who = await sign_up(host, f"t{tag}w")
+        if who is None or who.get("type") == protocol.AUTH_ERROR:
+            reason = (who or {}).get("reason", "no reply")
+            results.append(("accounts available", False, reason))
+            return results
+        results.append(("host signs up", who["user"]["name"] == f"t{tag}w",
+                        who["user"]["name"]))
+        results.append(("no ratings before playing", who["user"]["ratings"] == {},
+                        str(who["user"]["ratings"])))
+
+        guest = await _connect(url)
+        g = await sign_up(guest, f"t{tag}b")
+        results.append(("guest signs up", g.get("type") == protocol.AUTH_STATE, ""))
+
+        # A preset tempo, both signed in, not solo: this one is ratable.
+        await host.send(json.dumps({"type": protocol.CREATE_ROOM, "params": rapid}))
+        created = await _await_msg(host, {protocol.ROOM_CREATED}, 5)
+        await guest.send(json.dumps({"type": protocol.JOIN_ROOM,
+                                     "code": created["code"]}))
+        await _await_msg(guest, {protocol.ROOM_JOINED}, 5)
+        await _ready(host)
+        await _ready(guest)
+        results.append(("rated game starts",
+                        await _await_msg(host, {protocol.GAME_STATE}, 10) is not None, ""))
+
+        await guest.send(json.dumps({"type": protocol.RESIGN}))
+
+        # Where the game was stored. Both seats are told, because that
+        # recording is what the replay button asks for: the frames a client
+        # kept are only the half of the game it was allowed to see.
+        saved = await _await_msg(host, {protocol.GAME_SAVED}, 20)
+        results.append(("the stored game is announced",
+                        saved is not None and bool(saved.get("game_id")),
+                        str(saved.get("game_id") if saved else "no GAME_SAVED")))
+        results.append(("the other seat is told too",
+                        await _await_msg(guest, {protocol.GAME_SAVED}, 10) is not None,
+                        ""))
+
+        # And it can be fetched back, in full, by a player who was in it.
+        if saved is not None:
+            await host.send(json.dumps({"type": protocol.GET_GAME,
+                                        "id": saved["game_id"]}))
+            record = await _await_msg(host, {protocol.GAME_RECORD, protocol.ERROR}, 10)
+            ok = record is not None and record.get("type") == protocol.GAME_RECORD
+            results.append(("the stored recording comes back", ok,
+                            str(record.get("reason") if record else "no reply")))
+            # The header carries both players' mana and both civilizations,
+            # which is what makes a replay show the whole game rather than
+            # the half this client was sent while playing.
+            header = ((record or {}).get("recording") or {}).get("header") or {}
+            results.append(("it holds both sides",
+                            set(header.get("mana", {})) == {"white", "black"}
+                            and set(header.get("civs", {})) == {"white", "black"},
+                            f"mana={sorted(header.get('mana', {}))} "
+                            f"civs={sorted(header.get('civs', {}))}"))
+
+        moved = await _await_msg(host, {protocol.RATING_UPDATE}, 20)
+        if moved is None:
+            results.append(("rating update arrives", False, "no RATING_UPDATE"))
+            await guest.close()
+            return results
+
+        results.append(("rating update arrives", True, moved["tempo"]))
+        results.append(("winner gains",
+                        moved["white"]["after"] > moved["white"]["before"],
+                        f'{moved["white"]["before"]} -> {moved["white"]["after"]}'))
+        results.append(("loser drops",
+                        moved["black"]["after"] < moved["black"]["before"],
+                        f'{moved["black"]["before"]} -> {moved["black"]["after"]}'))
+        results.append(("both seats are told",
+                        await _await_msg(guest, {protocol.RATING_UPDATE}, 5) is not None,
+                        ""))
+        results.append(("rated at the standard tempo", moved["tempo"] == "rapid",
+                        moved["tempo"]))
+        await guest.close()
+    return results
+
+
+async def run_anonymous(url: str) -> list[tuple[str, bool, str]]:
+    """A game between two players with no accounts is stored like any other,
+    announced to both of them, and can be fetched back for a replay without
+    anybody signing in.
+
+    This is the whole of anonymous play: the row has null user ids, so nothing
+    lists it and the browser that played it is the only thing that remembers
+    the id - but the game itself is kept, in full, like every other one.
+    """
+    results = []
+    async with _connect(url) as host:
+        await host.send(json.dumps({"type": protocol.CREATE_ROOM, "params": {}}))
+        created = await _await_msg(host, {protocol.ROOM_CREATED}, 5)
+        if created is None:
+            results.append(("anonymous room created", False, "no ROOM_CREATED"))
+            return results
+        guest = await _connect(url)
+        await guest.send(json.dumps({"type": protocol.JOIN_ROOM,
+                                     "code": created["code"]}))
+        await _await_msg(guest, {protocol.ROOM_JOINED}, 5)
+        await _ready(host)
+        await _ready(guest)
+        results.append(("anonymous game starts",
+                        await _await_msg(host, {protocol.GAME_STATE}, 10) is not None,
+                        ""))
+
+        await guest.send(json.dumps({"type": protocol.RESIGN}))
+
+        saved = await _await_msg(host, {protocol.GAME_SAVED}, 20)
+        results.append(("an anonymous game is stored",
+                        saved is not None and bool(saved.get("game_id")),
+                        str(saved.get("game_id") if saved else "no GAME_SAVED")))
+        results.append(("both anonymous seats are told",
+                        await _await_msg(guest, {protocol.GAME_SAVED}, 10) is not None,
+                        ""))
+
+        if saved is not None:
+            # The point of the whole scenario: no account was involved at any
+            # stage, and the recording still comes back. Before this, the
+            # client fell back to the frames it had been sent, which the
+            # room's visibility settings had already stripped.
+            await host.send(json.dumps({"type": protocol.GET_GAME,
+                                        "id": saved["game_id"]}))
+            record = await _await_msg(host, {protocol.GAME_RECORD, protocol.ERROR}, 10)
+            ok = record is not None and record.get("type") == protocol.GAME_RECORD
+            results.append(("a signed-out client may fetch it", ok,
+                            str(record.get("reason") if record else "no reply")))
+            header = ((record or {}).get("recording") or {}).get("header") or {}
+            results.append(("it holds both sides",
+                            set(header.get("mana", {})) == {"white", "black"},
+                            f"mana={sorted(header.get('mana', {}))}"))
+        await guest.close()
+    return results
+
+
+async def run_unrated(url: str) -> list[tuple[str, bool, str]]:
+    """A custom tempo must not move a rating, however signed in both sides are."""
+    results = []
+    tag = secrets.token_hex(3)
+    async with _connect(url) as host:
+        await host.send(json.dumps({"type": protocol.SIGN_UP, "name": f"u{tag}w",
+                                    "password": "a test password"}))
+        who = await _await_msg(host, {protocol.AUTH_STATE, protocol.AUTH_ERROR}, 10)
+        if who is None or who.get("type") == protocol.AUTH_ERROR:
+            results.append(("accounts available", False,
+                            (who or {}).get("reason", "no reply")))
+            return results
+        guest = await _connect(url)
+        await guest.send(json.dumps({"type": protocol.SIGN_UP, "name": f"u{tag}b",
+                                     "password": "a test password"}))
+        await _await_msg(guest, {protocol.AUTH_STATE}, 10)
+
+        # Default params are not one of the three presets.
+        await host.send(json.dumps({"type": protocol.CREATE_ROOM, "params": {}}))
+        created = await _await_msg(host, {protocol.ROOM_CREATED}, 5)
+        await guest.send(json.dumps({"type": protocol.JOIN_ROOM,
+                                     "code": created["code"]}))
+        await _await_msg(guest, {protocol.ROOM_JOINED}, 5)
+        await _ready(host)
+        await _ready(guest)
+        await _await_msg(host, {protocol.GAME_STATE}, 10)
+        await guest.send(json.dumps({"type": protocol.RESIGN}))
+        late = await _await_msg(host, {protocol.RATING_UPDATE}, 6)
+        results.append(("a custom tempo moves no rating", late is None,
+                        "none arrived" if late is None else "RATING_UPDATE sent"))
         await guest.close()
     return results
 
@@ -427,7 +707,12 @@ async def amain() -> int:
     ap.add_argument("--hostile", action="store_true")
     ap.add_argument("--disconnect", action="store_true")
     ap.add_argument("--rejoin", action="store_true")
+    ap.add_argument("--seat", action="store_true",
+                    help="a seat left empty in the lobby is given back")
     ap.add_argument("--rematch", action="store_true")
+    ap.add_argument("--accounts", action="store_true",
+                    help="sign-up, a rated game, and the rating that follows; "
+                         "needs a server with a database")
     ap.add_argument("--grace", type=float, default=3.0,
                     help="must match the server's --grace")
     ap.add_argument("--rooms", type=int, default=1)
@@ -461,14 +746,18 @@ async def amain() -> int:
             print(f"[PASS] {len(codes)} distinct room code(s)")
 
     for enabled, runner in ((args.disconnect, run_disconnect),
-                            (args.rejoin, run_rejoin)):
+                            (args.rejoin, run_rejoin),
+                            (args.seat, run_lobby_seat)):
         if enabled:
             for label, ok, detail in await runner(args.url, args.grace):
                 failed |= not ok
                 print(f"[{'PASS' if ok else 'FAIL'}] {label}: {detail}")
 
     for enabled, runner in ((args.hostile, run_hostile),
-                            (args.rematch, run_rematch)):
+                            (args.rematch, run_rematch),
+                            (args.accounts, run_accounts),
+                            (args.accounts, run_anonymous),
+                            (args.accounts, run_unrated)):
         if enabled:
             for label, ok, detail in await runner(args.url):
                 failed |= not ok

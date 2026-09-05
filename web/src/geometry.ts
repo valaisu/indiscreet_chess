@@ -142,9 +142,12 @@ export function snapDestination(
     trySector(0.0, fwd, Math.min(maxFwd, boardMax(0.0, fwd)));
 
     // Diagonal capture circles: only an enemy in range opens a valid arc.
-    // The pawn's own hitbox decides the overlap, exactly as _piece_at_dest does.
+    // The overlap radius is the sum of the two hitbox radii, exactly as
+    // _piece_at_dest does. It is per target, not a property of the pawn: a
+    // civilization may size piece types apart, and assuming the target matches
+    // the pawn offers captures that physics will not carry out.
     const diagR = SQRT2 * Math.tan(freedomRad);
-    const pawnD = piece.d ?? DIAMETER_PIECE;
+    const pawnR = (piece.d ?? DIAMETER_PIECE) / 2;
     if (pieces !== null) {
       for (const xdir of [-1.0, 1.0]) {
         const ccx = px + xdir;
@@ -154,22 +157,30 @@ export function snapDestination(
         for (const other of pieces) {
           if (other.id === piece.id) continue;
           if (other.owner === owner) continue;
+          const sumR = pawnR + (other.d ?? DIAMETER_PIECE) / 2;
           const otherD = Math.hypot(other.x - ccx, other.y - ccy);
-          if (otherD > diagR + pawnD + 1e-6) continue;
+          if (otherD > diagR + sumR + 1e-6) continue;
           if (
             dToCenter <= diagR &&
-            Math.hypot(bx - other.x, by - other.y) <= pawnD
+            Math.hypot(bx - other.x, by - other.y) <= sumR
           ) {
             return { x: bx, y: by, d: 0.0 };
           }
+          // A legal destination has to satisfy both discs at once: within
+          // diagR of the circle centre, and within sumR of the target. Settle
+          // the radius first and measure the arc at that radius. The safe
+          // half-angle depends on it, so an alpha measured at diagR does not
+          // bound a point placed at 0.99 * diagR - the two pullbacks were
+          // applied independently and pushed each other out of the target.
+          const snapR = diagR * 0.99;
           let alpha: number;
           if (otherD < 1e-9) {
             alpha = Math.PI;
           } else {
             const cosA =
-              (diagR * diagR + otherD * otherD - pawnD * pawnD) /
-              (2 * diagR * otherD);
-            if (cosA >= 1.0) continue; // too far; no valid arc
+              (snapR * snapR + otherD * otherD - sumR * sumR) /
+              (2 * snapR * otherD);
+            if (cosA >= 1.0) continue; // too far; no valid arc at this radius
             alpha = Math.acos(Math.max(-1.0, cosA));
           }
           const cAngle = Math.atan2(by - ccy, bx - ccx);
@@ -177,12 +188,11 @@ export function snapDestination(
           const delta =
             ((cAngle - pAngle + Math.PI) % (2 * Math.PI) + 2 * Math.PI) %
               (2 * Math.PI) - Math.PI;
+          const safe = alpha * 0.99;
           const snapAngle =
-            Math.abs(delta) <= alpha
-              ? cAngle
-              : pAngle + Math.sign(delta) * alpha * 0.99;
-          const sx = ccx + Math.cos(snapAngle) * diagR * 0.99;
-          const sy = ccy + Math.sin(snapAngle) * diagR * 0.99;
+            Math.abs(delta) <= safe ? cAngle : pAngle + Math.sign(delta) * safe;
+          const sx = ccx + Math.cos(snapAngle) * snapR;
+          const sy = ccy + Math.sin(snapAngle) * snapR;
           const d = Math.hypot(bx - sx, by - sy);
           if (d < bestD) {
             bestD = d;

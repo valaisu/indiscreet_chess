@@ -22,10 +22,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-from server import civs, params
+from server import civs, params, presets
 
 ROOT = Path(__file__).resolve().parent.parent
 CIVS_TS = ROOT / "web" / "src" / "civs.ts"
+PRESETS_TS = ROOT / "web" / "src" / "presets.ts"
 
 # What the client used to put in SET_READY, which is what the server now has to
 # reproduce on its own: the tempo with the civ applied, plus absolute per-piece
@@ -45,21 +46,9 @@ process.stdin.on("end", () => {
 });
 """
 
-# Mirrors PRESETS in web/src/presets.ts: the tempos a real room is opened with.
-PRESETS = {
-    "bullet": {"mana_refill_rate": 0.35, "maximum_mana": 5.0, "base_move_cost": 1.0,
-               "distance_cost": 0.2, "preparation_period": 0.35, "cooldown": 0.9,
-               "movement_speed": 4.5, "movement_freedom_deg": 5.0,
-               "diameter_piece": 0.6},
-    "rapid":  {"mana_refill_rate": 0.15, "maximum_mana": 5.0, "base_move_cost": 1.0,
-               "distance_cost": 0.2, "preparation_period": 0.5, "cooldown": 1.3,
-               "movement_speed": 2.0, "movement_freedom_deg": 5.0,
-               "diameter_piece": 0.6},
-    "slow":   {"mana_refill_rate": 0.075, "maximum_mana": 5.0, "base_move_cost": 1.0,
-               "distance_cost": 0.2, "preparation_period": 0.65, "cooldown": 1.7,
-               "movement_speed": 1.0, "movement_freedom_deg": 5.0,
-               "diameter_piece": 0.6},
-}
+# The tempos a real room is opened with. One Python copy, in server/presets.py:
+# this file is what proves it still matches web/src/presets.ts.
+PRESETS = presets.PRESETS
 
 
 def custom_bases(rng: random.Random, n: int) -> list[dict]:
@@ -138,7 +127,25 @@ def main() -> int:
         print(f"FAIL: civ names differ: civs.ts={ts_names} civs.py={sorted(civs.CIV_NAMES)}")
         return 1
 
-    print("PASS: both tables resolve every civilization identically")
+    # The tempo table is the base every civilization multiplies, and the server
+    # now reads it directly to decide whether a game can be rated. A drift here
+    # would rate games on numbers the two sides did not agree on.
+    ts_presets = json.loads(subprocess.run(
+        ["node", "--experimental-strip-types", "-e",
+         f'import("{PRESETS_TS}").then(m => '
+         f'process.stdout.write(JSON.stringify(m.PRESETS)))'],
+        capture_output=True, check=True).stdout)
+    if ts_presets != presets.PRESETS:
+        differing = {k for k in set(ts_presets) | set(presets.PRESETS)
+                     if ts_presets.get(k) != presets.PRESETS.get(k)}
+        print(f"FAIL: tempo presets differ: {sorted(differing)}")
+        for mode in sorted(differing):
+            print(f"  presets.ts={ts_presets.get(mode)}")
+            print(f"  presets.py={presets.PRESETS.get(mode)}")
+        return 1
+
+    print("PASS: both tables resolve every civilization identically, "
+          "and the tempo presets match")
     return 0
 
 

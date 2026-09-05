@@ -424,3 +424,233 @@ spending.
 - [x] `tools/fake_client.py --rematch` plays a game, resigns, rematches from
       both sides and plays the second game. The room lifecycle changed, so the
       headless client had to change with it.
+
+## Part 23 - Balanced rooms, finding a game, and two capture bugs [done]
+
+(The "Not built: accounts and rating" note further up is superseded: accounts,
+ratings and stored replays shipped in `Add database`.)
+
+- [x] **A pawn's diagonal capture measured the wrong distance.** Legality asked
+      whether an enemy centre was within `pawn.diameter` of the destination.
+      That equals the sum of the two radii only when both pieces are the same
+      size, and civilizations size piece types apart - so a large pawn was
+      offered captures it could not reach: the move validated, the mana was
+      spent, the pawn flew out and landed on nothing. Now `pawn.radius +
+      other.radius`, in `server/rules.py` and in `web/src/geometry.ts`, which
+      has to predict it. `rules.md` said `diameter_piece` too, and said in the
+      same sentence that the intent was "the Pawn's hitbox would overlap that
+      piece" - the prose was right and the formula was wrong, so the formula
+      changed.
+- [x] `tools/parity_test.py` gives pieces sizes from a pool instead of building
+      every case at 0.6, which is why it never saw the above. That alone still
+      found nothing: the diagonal capture circle has radius 0.124, so a click
+      drawn over the whole board lands in one about once in 3000 tries.
+      `make_pawn_capture_case` aims at the branch, and finds 858 failures
+      against the old code where the uniform sweep found zero.
+- [x] **A second, older bug the aimed sweep exposed**: the arc snap computed
+      its half-angle at radius `diagR` and then placed the point at
+      `0.99 * diagR`. The safe half-angle depends on the radius, so the point
+      could fall outside the target's hitbox and the server rejected a
+      destination the client had just offered - a dead click, with ordinary
+      default-sized pieces, in the shipped game. The radius is settled first
+      and the angle measured at it.
+- [x] **Balanced mode**: a room may give the two seats different parameters, as
+      a handicap. This existed once and was deleted, because ROOM_STATE
+      announced one `base_params` and a joiner could be seated into a weakened
+      side without ever being shown it. It is back with that closed: both
+      columns ride in ROOM_STATE with a `balanced` flag, and the pre-game
+      screen prints the rows that differ, colours which side each favours, and
+      marks which column is yours. Never rated - the result measures the
+      handicap.
+- [x] `params_black` in CREATE_ROOM overrides black's column; absent, both
+      seats share one. Validated and start-overlap checked per side, because
+      piece size is per side now too.
+- [x] **Game creation is its own screen.** The tempo, visibility and movement
+      parameter panels moved off the Play tab into `#create`, which opens with
+      "Who can join": Anyone (listed), Invite code, or Just me. Solo practice
+      is that third option rather than a separate button - it is the same
+      decision.
+- [x] **`#find`, the open-game list.** `LIST_ROOMS` returns public rooms that
+      have a free seat and have not started, with tempo, balanced flag, the
+      host's name if they are signed in, and how long they have waited.
+- [x] **Who is online**, on the Play tab: a count of sockets and the names of
+      signed-in players, each opening a public card (`GET_PROFILE`) with their
+      ratings. Polled every 30s while that tab is in front, not pushed: a
+      broadcast to everybody on every connect is a lot of traffic for a number
+      in a corner. Replays stayed private to the people who played them at
+      this point; Part 24 opened them to any signed-in player, deliberately.
+- [x] **Both civilizations, in full, during the match.** The one corner legend
+      became two panels: economy on the left edge, per-piece on the right, each
+      listing both players. Below 700px they move to the bottom, half width
+      each, because a phone has no room beside the board.
+- [x] **Deselecting is easier**: spacebar puts the piece down, and so does a
+      press anywhere off the board (the canvas is larger than the eight
+      squares, so there is always a margin). Keyboard shortcuts now ignore
+      keystrokes aimed at a text field, which "f" did not - typing a name in
+      the sign-in box flipped the board behind it.
+- [x] Protocol VERSION 8 -> 9.
+- [x] `tools/lobby_test.py`: 24 checks over balanced rooms, the listing and
+      presence, including that the *joiner* is sent both columns and that a
+      balanced room still hides the opponent's mana.
+
+## Part 24 - Seats, quick match, profiles and a rematch both sides agree [done]
+
+- [x] **A seat comes back to the room.** `Room.release_seat` and the grace
+      timer that calls it. A seat was held by its token for as long as the
+      room lived, which is right during a game and wrong once it is not: a
+      phone that slept lost the token with the page, so its own reservation
+      answered "room is full", while the player still waiting was told "not
+      here yet" forever. Leaving on purpose (`Room.leave`) gives the seat back
+      at once; losing the socket in the lobby gives it back after the same
+      grace window a game uses, so a reload still reclaims its colour.
+- [x] **The same bug split quick match players into two rooms.** A player who
+      left and asked again could not be put back into the room they had left,
+      because it still counted as full, so the server opened a second one and
+      the two of them sat in different rooms.
+- [x] **A rejoin re-sends ROOM_STATE.** The player coming back had ROOM_JOINED
+      and nothing else, so their screen drew an opponent it had never been
+      told about: "not here yet", about somebody sitting right there.
+- [x] **Quick match asks for a tempo**, one of the three, and the server builds
+      the room from its own presets. It used to send whatever the create
+      screen had last been left on - a screen the player had no reason to have
+      opened - so nobody knew what they were agreeing to. It pairs only with
+      rooms that changed nothing else (`Room.matches_quick`), which also makes
+      a quick game rateable by construction.
+- [x] **A game can be unrated because the host said so.** `unrated` on
+      CREATE_ROOM, a checkbox on the create screen, and `rating.settings_reason`
+      split out of `rated_reason` so the open-game list can ask about the room
+      without asking about who is sitting in it. The pre-game screen prints
+      the server's answer ("Not rated: ...") before anyone readies.
+- [x] **A rematch takes both players.** One press used to reset the room, which
+      pulled the other player off the result they were still reading into the
+      civilization screen. Both seats now ask, like readying up. A press that
+      lands in the moment between the last frame and the room being marked
+      finished is recorded rather than dropped: `Room.maybe_rematch` runs again
+      when the room actually finishes.
+- [x] **Which seat is which, on screen.** The ready cells say "You - White" and
+      "Opponent - Black" with each player's name and their rating at this
+      room's tempo, carried per seat in ROOM_STATE (`Room.seat_card`). It
+      matters most in a balanced room, where the colour decides which column of
+      numbers you play under.
+- [x] **Name plates during the match**, at the end of the board each player
+      plays from, so both names and ratings are visible while playing.
+- [x] **Four civilization panels, not two lists of two.** Left and right say
+      what a box is about (economy, pieces); near and far say whose it is,
+      following the board's orientation - so the pair at your end is yours,
+      flipped or not.
+- [x] **The base civilization is a civilization.** "Classical - Vanilla", with
+      a card the same shape as the other eight, a name on the mana bar and a
+      row in the rules reference. "None" read as having failed to pick.
+- [x] **Profiles are public, and paged.** GET_PROFILE carries a page of that
+      player's games, twenty at a time, and so does LIST_GAMES for your own.
+      A history row is the whole game now - both names, both civilizations and
+      both ratings as they stood before it - so the same rows draw your own
+      history and somebody else's card.
+- [x] **Any player may watch any finished game.** GET_GAME no longer
+      asks whether you played in it. Worth knowing what that gives away: a
+      recording holds the preparation and destinations the room's visibility
+      settings hid while it was being played, so past games can be studied in a
+      detail the live game refused.
+- [x] The top bar says whether you are signed in, and is the way to the profile.
+- [x] Protocol VERSION 9 -> 10.
+- [x] `tools/lobby_test.py` covers quick match (pairing, tempo, leaving and
+      returning, an unknown tempo) and unrated rooms;
+      `fake_client --seat` covers the lobby seat coming back;
+      `--rematch` covers the two-sided agreement; `tools/accounts_test.py`
+      covers the paged history rows.
+
+## Part 25 - Replays show the whole game [done]
+
+- [x] **A replay is watched from the stored log, not from what your client was
+      sent.** The two ways into a replay showed different games: from the
+      profile, the server's log expanded into complete frames; straight after
+      the game, the frames this client had kept - which with the default
+      settings carry no opponent mana and no destinations for their moves.
+      `GAME_SAVED` tells both seats where the finished game was stored, and the
+      post-game button asks for that. The frames in memory are still the
+      fallback, for a server with no database behind it.
+- [x] **Nothing is hidden in a replay.** The hiding is a rule of playing: both
+      mana pools, both sides' preparation, cooldowns and destinations are in
+      the stored log and all of it is drawn.
+- [x] **The civilization panels are off while watching.** Both civilizations
+      are already named on their own mana bars, and four panels of percentages
+      around a board that has also given up a strip to the replay bar is more
+      than fits. They come back on returning to the finished game.
+- [x] **The replay bar is a strip the board makes room for**, not a box over
+      it. Floating at `bottom: 1rem` it sat on the lower mana bar - the very
+      thing the replay is for - and at `max-width: 95vw` a phone pushed its own
+      controls off the side. `#game.replaying` takes the bar's height off the
+      canvas instead, so nothing overlaps at any size. Checked from 320px up:
+      no overflow, and the slider keeps 95px at the narrowest.
+- [x] **Three controls: back, the tempo, forward.** The tempo button reads the
+      speed and is also the pause, because pause here is a speed of zero. The
+      arrows step through -4x, -1x, -0.5x, 0x, 0.5x, 1x, 4x, so a replay runs
+      backwards as well as forwards; it stops at whichever end it reaches, and
+      asking to run on from that end starts again from the other one.
+- [x] `Player.playing` is derived from the speed rather than stored beside it.
+- [x] The seek slider's release is handled on the window: a touch that ends
+      anywhere else never gave the slider its `pointerup`, and the bar then
+      stopped following the replay and looked frozen.
+- [x] **A reload after the game ends no longer lies.** It rejoins a finished
+      room, which is not "waiting", and the pre-game screen was drawn from
+      defaults: "not here yet", about an opponent sitting right there. The
+      seats are drawn from ROOM_STATE whatever the room is doing, and the
+      screen says the game has finished.
+- [x] `fake_client --accounts` asserts GAME_SAVED reaches both seats, that the
+      recording comes back, and that it holds both sides.
+
+## Part 26 - Anonymous games are ordinary games [done]
+
+- [x] **A game with nobody signed in was already stored; it just could not be
+      read back.** The row has null user ids and has had since the first
+      migration, but `GET_GAME` asked for an account, so a player without one
+      fell back to the frames their own client had kept - which the room's
+      visibility settings had already stripped of the opponent's mana and
+      destinations. Two ways into a replay, two different games, exactly the
+      split Part 25 set out to remove.
+- [x] **The sign-in requirement on GET_GAME is gone.** It bought nothing:
+      `GET_PROFILE` needs no account either and answers with a page of game
+      ids, so the ids were already readable anonymously and only the
+      recordings behind them were not. What is left is that an id is
+      unguessable, which is the model the schema always described: replayable
+      by whoever holds the link.
+- [x] **The local history row carries the server's id.** `GAME_SAVED` arrives
+      a moment after the final frame, so `logMatch` writes the row and the
+      handler names the stored game on it. Without an account this browser is
+      the only index there is - nothing can list games with no user id on them
+      - but the game itself is kept in full like every other one, so a replay
+      now survives a reload instead of living in memory until the tab closes.
+- [x] **Fetching a replay connects first.** The socket is opened lazily and
+      boots itself only when a token is stored, so a signed-out player who had
+      reloaded had no connection: the button sent nothing and said nothing.
+      `openStoredGame` is the one path both entry points use.
+- [x] `fake_client --accounts` gained `run_anonymous`: two players with no
+      accounts, a stored game announced to both, and the recording fetched
+      back by a client that never signed in.
+- [x] Known and not fixed: two tabs of one browser finishing the same game
+      both write to `localStorage` and can clobber each other's id, because a
+      read-modify-write there is not atomic across tabs. It needs two players
+      in one browser profile, which is a test setup and not a game.
+
+## Part 27 - Both key bindings are settable [done]
+
+- [x] **The unselect key was never mentioned anywhere.** It was two hardcoded
+      bindings - Escape, and Space while a game was playable - and Settings
+      listed only the precise key. Both are now rows in Settings, and both
+      hold any key on the keyboard rather than a menu of three modifiers.
+- [x] **A binding is a `KeyboardEvent.key`,** so a modifier ("Shift") and a
+      letter ("q") are the same kind of value. `settings.keyMatches` compares
+      single characters without case, because the same physical key reports
+      "q" or "Q" depending on whether shift is down - and with the precise key
+      on Shift, that is most of the time.
+- [x] **The button is the control and the value.** Press it, it says "Press a
+      key…", and the next keydown binds. Captured on the window in the capture
+      phase, so the keystroke being bound never reaches the game's own
+      shortcuts - it would otherwise flip the board on its way to becoming the
+      flip key. Tab is refused (the page needs it), and so is the key the
+      other binding already holds, with the reason said in place.
+- [x] **Space no longer unselects unless it is bound to.** The configured key
+      is the unselect key, defaulting to Escape; Space stays play/pause in a
+      replay. Anyone who wants the old second binding can set it, and a bound
+      Space calls `preventDefault` so it does not also scroll the page or
+      press a focused button.
