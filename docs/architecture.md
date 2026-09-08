@@ -235,7 +235,17 @@ that need nothing but python and node:
 | `pawn_test.py` `visibility_test.py` `rating_test.py` | nothing |
 | `civ_table.mjs` | node; prints the civilization budget |
 | `fake_client.py` `lobby_test.py` `solo_test.py` | a running server |
+| `stress.py --load` | a running server, started with the two per-address limits raised |
+| `stress.py --bench` | nothing, and it runs on the deployed machine too |
 | `accounts_test.py` `db_test.py` `balance.py` | `DATABASE_URL` |
 
 The ones that need a server or a database are deliberately not in `deploy.sh`:
 that script has to work on a machine with neither.
+
+`stress.py` answers "how many games at once". `--bench` runs real game loops
+with no sockets and reads its own CPU; `--load` drives paired bots over real
+sockets and reports the tick rate the server actually sustained, which is the
+number that matters because a loaded server does not drop frames, it runs
+every game in slow motion. Do not time this work in a tight loop: the server
+ticks at a 5% duty cycle, and a tight loop reported a third of the true cost
+off the back of a boosted clock and warm caches.

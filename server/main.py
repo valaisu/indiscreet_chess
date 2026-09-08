@@ -601,6 +601,10 @@ async def main() -> None:
     parser.add_argument("--max-conn-per-ip", type=int, default=MAX_CONN_PER_IP,
                         help="raise for local load testing, where every client "
                              "shares one address")
+    parser.add_argument("--max-rooms-per-ip", type=int,
+                        default=room_mod.RoomManager.MAX_ROOMS_PER_IP,
+                        help="the other half of the same limit: tools/stress.py "
+                             "opens one room per game and they all share an address")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -611,6 +615,7 @@ async def main() -> None:
     )
 
     MAX_CONN_PER_IP = args.max_conn_per_ip
+    room_mod.RoomManager.MAX_ROOMS_PER_IP = args.max_rooms_per_ip
     room_mod.DISCONNECT_GRACE = args.grace
 
     # Local runs read .env; in production these are Fly secrets and are
