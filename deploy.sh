@@ -54,6 +54,9 @@ PYTHONPATH=. python3 tools/civ_parity.py
 step "pawn rules"
 PYTHONPATH=. python3 tools/pawn_test.py
 
+step "castling"
+PYTHONPATH=. python3 tools/castling_test.py
+
 step "hidden information"
 PYTHONPATH=. python3 tools/visibility_test.py
 

@@ -267,9 +267,12 @@ export class Renderer {
       const maxFwd = piece.has_moved ? 1.0 : 2.0;
       this.wedgeMana(cx, cy, this.dirToAngle(0, fwd), fr, maxFwd * this.sq, manaR);
 
-      // Diagonal capture landing circles: red overall, with the arc that a
-      // reachable enemy actually opens painted on top.
-      const pawnD = piece.d ?? DIAMETER_PIECE;
+      // Diagonal capture landing circles: red overall, with the part where the
+      // pawn would touch an enemy painted on top. That part is the circle
+      // clipped to a disc of the two radii summed around each enemy - the same
+      // test as _piece_at_dest - so it is a lens at the edge nearest the
+      // enemy, not a wedge from the centre.
+      const pawnR = (piece.d ?? DIAMETER_PIECE) / 2;
       const diagRBoard = SQRT2 * Math.tan(fr);
       const diagRPx = Math.max(4, diagRBoard * this.sq);
       const diagColor = SQRT2 <= maxDist ? C_HINT_OK : C_HINT_NO_MANA;
@@ -284,24 +287,28 @@ export class Renderer {
         ctx.fillStyle = this.hintColor(C_HINT_ILLEGAL);
         ctx.fill();
 
+        // One clip path holding every reachable enemy's disc is their union,
+        // so two enemies near one circle do not paint the overlap twice.
+        ctx.save();
+        ctx.beginPath();
+        let any = false;
         for (const other of state.pieces) {
           if (other.id === piece.id || other.owner === owner) continue;
-          const odx = other.x - ccxB;
-          const ody = other.y - ccyB;
-          const otherD = Math.hypot(odx, ody);
-          if (otherD > diagRBoard + pawnD + 1e-6) continue;
-          let alpha: number;
-          if (otherD < 1e-9) {
-            alpha = Math.PI;
-          } else {
-            const cosA =
-              (diagRBoard * diagRBoard + otherD * otherD - pawnD * pawnD) /
-              (2 * diagRBoard * otherD);
-            if (cosA >= 1.0) continue;
-            alpha = Math.acos(Math.max(-1, cosA));
-          }
-          this.wedge(ccxPx, ccyPx, this.dirToAngle(odx, ody), alpha, diagRPx, diagColor);
+          const sumR = pawnR + (other.d ?? DIAMETER_PIECE) / 2;
+          if (Math.hypot(other.x - ccxB, other.y - ccyB) > diagRBoard + sumR) continue;
+          const [oxPx, oyPx] = this.boardToPx(other.x, other.y);
+          ctx.moveTo(oxPx + sumR * this.sq, oyPx);
+          ctx.arc(oxPx, oyPx, sumR * this.sq, 0, Math.PI * 2);
+          any = true;
         }
+        if (any) {
+          ctx.clip();
+          ctx.beginPath();
+          ctx.arc(ccxPx, ccyPx, diagRPx, 0, Math.PI * 2);
+          ctx.fillStyle = this.hintColor(diagColor);
+          ctx.fill();
+        }
+        ctx.restore();
       }
     } else if (ptype === "king") {
       for (const [lx, ly] of ALL8) {

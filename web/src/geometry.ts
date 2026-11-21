@@ -24,6 +24,8 @@ export interface Piece {
 
 export const SQRT2 = Math.sqrt(2.0);
 export const DIAMETER_PIECE = 0.6; // mirrors server/params.py default
+/** How far outside a pawn's capture circle a click may land and still aim at it. */
+const CAPTURE_CLICK_SLACK = 0.3;
 
 const KNIGHT_OFFSETS: [number, number][] = [
   [2, 1], [2, -1], [-2, 1], [-2, -1], [1, 2], [1, -2], [-1, 2], [-1, -2],
@@ -154,6 +156,11 @@ export function snapDestination(
         const ccy = py + fwd;
         if (!(ccx >= 0.0 && ccx <= 8.0 && ccy >= 0.0 && ccy <= 8.0)) continue;
         const dToCenter = Math.hypot(bx - ccx, by - ccy);
+        // A capture is offered only to a click on or near its circle. The
+        // legal part can be a sliver at the far edge from an enemy standing
+        // beside the pawn, and the general snap reach would carry a click on
+        // that enemy (drawn red) half a square across to it.
+        if (dToCenter > diagR + CAPTURE_CLICK_SLACK) continue;
         for (const other of pieces) {
           if (other.id === piece.id) continue;
           if (other.owner === owner) continue;

@@ -196,6 +196,9 @@ class GameState:
         # 6. CCD: advance moving pieces, resolve collisions.
         physics.advance_and_resolve(self.pieces, dt)
 
+        # 6b. Castling partners may overlap only until they come apart.
+        self._release_castling_partners()
+
         # 7. Promotions: pawns that entered the last rank become queens.
         self._check_promotions()
 
@@ -302,6 +305,26 @@ class GameState:
     # ------------------------------------------------------------------
     # Promotions
     # ------------------------------------------------------------------
+
+    def _release_castling_partners(self) -> None:
+        """End the pair's permission to overlap once they have separated.
+
+        Kept while either is still moving, because the transit crosses the
+        two over each other and they start it apart. Kept while they overlap,
+        so they can still move out of each other. Otherwise it would last the
+        whole game, and the two would pass through each other forever.
+        """
+        for p in self.pieces:
+            if not p.castling_partner_id:
+                continue
+            q = self._find(p.castling_partner_id)
+            if q is not None and (
+                    p.state == PieceState.MOVING or q.state == PieceState.MOVING
+                    or math.hypot(p.x - q.x, p.y - q.y) < p.radius + q.radius):
+                continue
+            p.castling_partner_id = ""
+            if q is not None:
+                q.castling_partner_id = ""
 
     def _check_promotions(self) -> None:
         """A pawn promotes when its centerpoint reaches the last rank - not
