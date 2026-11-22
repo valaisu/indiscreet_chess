@@ -6,7 +6,7 @@ A real-time chess variant where both players move simultaneously on a continuous
 
 (The project was called Indiscreet Chess; the deployed hostnames still say so, since renaming them would change the link people have.)
 
-**[Play in your browser](https://indiscreet-chess.indiscreet-chess-web.workers.dev)** - nothing to install. Create a room and share the code, or take whoever is waiting.
+**[Play in your browser](https://continuous-chess.com)** - nothing to install. Create a room and share the code, or take whoever is waiting.
 
 ## How It's Different From Regular Chess
 

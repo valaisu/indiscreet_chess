@@ -8,6 +8,6 @@
 #  nowhere to load from, and frame-src 'none' covers the short payloads that
 #  fit where a script tag does not.
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss://indiscreet-chess-valaisu.fly.dev ws://localhost:8765 wss://localhost:8765; frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss://server.continuous-chess.com wss://indiscreet-chess-valaisu.fly.dev ws://localhost:8765 wss://localhost:8765; frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'none'
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer

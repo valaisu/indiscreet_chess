@@ -14,7 +14,7 @@ primary_region = "arn"
   # Only these pages may open sockets. Without it any site could drive this
   # server and spend its egress. localhost is kept so `npm run dev` can be
   # pointed at production while working on the client.
-  ALLOWED_ORIGINS = "https://indiscreet-chess.indiscreet-chess-web.workers.dev,http://localhost:5173"
+  ALLOWED_ORIGINS = "https://continuous-chess.com,https://indiscreet-chess.indiscreet-chess-web.workers.dev,http://localhost:5173"
 
 [http_service]
   internal_port = 8765
