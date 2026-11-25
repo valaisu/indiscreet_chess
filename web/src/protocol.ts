@@ -1,6 +1,6 @@
 // Mirrors shared/protocol.py. Keep in sync.
 // Must equal VERSION in shared/protocol.py; deploy.sh refuses to ship a mismatch.
-export const VERSION = 11;
+export const VERSION = 12;
 
 /** The three tempos a quick match can ask for. */
 export const TEMPOS = ["bullet", "rapid", "slow"] as const;
@@ -32,6 +32,19 @@ export const GET_GAME = "GET_GAME";
 export const LIST_ROOMS = "LIST_ROOMS";
 export const LIST_ONLINE = "LIST_ONLINE";
 export const GET_PROFILE = "GET_PROFILE";
+// Watch a running game, by the presence key of somebody playing it.
+export const SPECTATE = "SPECTATE";
+export const LIST_FRIENDS = "LIST_FRIENDS";
+export const FRIEND_REQUEST = "FRIEND_REQUEST";
+export const FRIEND_RESPOND = "FRIEND_RESPOND";
+export const FRIEND_REMOVE = "FRIEND_REMOVE";
+export const CHALLENGE = "CHALLENGE";
+export const CHALLENGE_ANSWER = "CHALLENGE_ANSWER";
+export const CHALLENGE_CANCEL = "CHALLENGE_CANCEL";
+// Refused by the server unless this socket is signed in as an admin.
+export const ADMIN_STATS = "ADMIN_STATS";
+export const ADMIN_LIST_GAMES = "ADMIN_LIST_GAMES";
+export const ADMIN_LIST_USERS = "ADMIN_LIST_USERS";
 
 export const ROOM_CREATED = "ROOM_CREATED";
 export const ROOM_JOINED = "ROOM_JOINED";
@@ -49,6 +62,56 @@ export const GAME_RECORD = "GAME_RECORD";
 export const ROOM_LIST = "ROOM_LIST";
 export const ONLINE_LIST = "ONLINE_LIST";
 export const PROFILE = "PROFILE";
+export const SPECTATING = "SPECTATING";
+export const SPECTATE_END = "SPECTATE_END";
+export const FRIEND_LIST = "FRIEND_LIST";
+export const CHALLENGE_SENT = "CHALLENGE_SENT";
+export const CHALLENGE_RECEIVED = "CHALLENGE_RECEIVED";
+export const CHALLENGE_CLOSED = "CHALLENGE_CLOSED";
+export const ADMIN_GAMES = "ADMIN_GAMES";
+export const ADMIN_USERS = "ADMIN_USERS";
+
+/** What somebody connected is doing. "offline" only ever describes a friend
+ *  or a card: the online list has nobody offline in it. */
+export type Status = "online" | "in a room" | "playing" | "watching" | "offline";
+
+/** One person in the online list: an account, or a guest's socket. */
+export interface Person {
+  key: string;
+  id: string | null;
+  name: string;
+  guest: boolean;
+  status: Status;
+  /** The key to spectate them by, while they are playing a running game. */
+  watch: string | null;
+  /** Who they are playing, when that is an account; null for a guest. */
+  opponent: string | null;
+  solo: boolean;
+}
+
+export interface OnlineList {
+  count: number;
+  signed_in: number;
+  people?: Person[];
+  /** Which entry is this socket's own. */
+  you?: string | null;
+}
+
+export interface Friend {
+  id: string;
+  name: string;
+  status: Status;
+  watch: string | null;
+  opponent: string | null;
+}
+
+export interface FriendList {
+  friends: Friend[];
+  incoming: { id: string; name: string }[];
+  outgoing: { id: string; name: string }[];
+  /** What became of the request this answers, when there is something to say. */
+  note: string | null;
+}
 
 /** One side of a stored game. A null name is an anonymous seat, not a gap. */
 export interface GameSide {
@@ -102,6 +165,10 @@ export interface PublicProfile extends GamePage {
   id: string;
   name: string;
   ratings: Record<string, { rating: number; games: number }>;
+  status?: Status;
+  watch?: string | null;
+  /** Where you stand with them. Null when you are signed out. */
+  friend?: "friends" | "incoming" | "outgoing" | "none" | "self" | null;
 }
 
 /** One seat of a room, as ROOM_STATE describes it. */
@@ -128,6 +195,8 @@ export interface Identity {
    * and the device's own value stands. Absent entirely from an old server.
    */
   settings?: Partial<Settings>;
+  /** Whether to show the admin tab. Display only: the server checks again. */
+  admin?: boolean;
 }
 
 import type { Settings } from "./settings.ts";

@@ -19,7 +19,8 @@ import { Recording, Player, SPEEDS, NORMAL_SPEED } from "./replay.ts";
 import * as account from "./account.ts";
 import { expand, ExpandError } from "./expand.ts";
 import type { StoredGame, OpenRoom, PublicProfile, SeatCard,
-              GameSide } from "./protocol.ts";
+              GameSide, OnlineList, Person, FriendList, Friend,
+              Status } from "./protocol.ts";
 
 const CLICK_R_SELECT = 0.5; // forgiving radius when nothing is selected
 const CLICK_R_SWITCH = 0.3; // strict radius once a piece is selected
@@ -63,11 +64,20 @@ let retryTimer: number | null = null;
 let stale = false; // server speaks a protocol this bundle does not
 let soloRoom = false; // this client holds both seats
 let inRoom = false;   // between joining a room and leaving it
+/**
+ * Watching somebody else's game: inRoom is true and the board is up, but there
+ * is no seat. Nothing here can move, resign or ask for a rematch, and the
+ * server would refuse it if it tried.
+ */
+let spectating = false;
+/** Which tab a spectator goes back to: wherever the Watch button was. */
+let watchFrom = "online";
 let precise = false; // any drag distance counts as a move while this is on
 let preciseLatched = false; // the on-screen button holds it; the key only taps
 let recording = new Recording();
 let player: Player | null = null; // non-null while watching the replay
-let replayReturn: "postgame" | "profile" | "card" = "postgame";
+type ReplayFrom = "postgame" | "profile" | "card" | "admin";
+let replayReturn: ReplayFrom = "postgame";
 /**
  * The stored copy of the game just finished, once the server has written it.
  *
@@ -78,8 +88,7 @@ let replayReturn: "postgame" | "profile" | "card" = "postgame";
  */
 let lastGameId: string | null = null;
 /** Where a recording being fetched should be shown, and from whose side. */
-let pendingReplay:
-  { from: "postgame" | "profile" | "card"; seat: string | null } | null = null;
+let pendingReplay: { from: ReplayFrom; seat: string | null } | null = null;
 let matchLogged = false; // one history row per game, however many final frames
 /** The history row this game was written to, so GAME_SAVED can name it. */
 let lastMatchId: string | null = null;
@@ -171,8 +180,7 @@ async function ensureConnected(): Promise<boolean> {
         watchReplay(recording, pending.seat, "postgame");
         return;
       }
-      const card = $("player-card") as HTMLElement;
-      $(card.hidden ? "pf-summary" : "pc-note").textContent =
+      $(replayNoteId(pending.from)).textContent =
         m.reason ?? "that game could not be opened";
       return;
     }
@@ -191,6 +199,8 @@ async function ensureConnected(): Promise<boolean> {
     setStatus(reason, true);
   });
   net.on(P.ROOM_CREATED, (m) => {
+    // A challenge accepted while this player was watching something.
+    if (spectating || player) resetGameScreen();
     soloRoom = !!m.solo;
     inRoom = true;
     createEl.style.display = "none";
@@ -199,6 +209,7 @@ async function ensureConnected(): Promise<boolean> {
     showPregame(m.code);
   });
   net.on(P.ROOM_JOINED, (m) => {
+    if (spectating || player) resetGameScreen();
     rejoining = false;
     rejoinAttempts = 0;
     createEl.style.display = "none";
@@ -209,6 +220,14 @@ async function ensureConnected(): Promise<boolean> {
     showPregame(m.code);
   });
   net.on(P.ROOM_STATE, (m) => {
+    showWatchers(m.watchers ?? 0);
+    // A spectator needs the names for the plates and nothing else: the rest
+    // of this is the pre-game screen, which is for the two people playing.
+    if (spectating) {
+      roomSeats = m.seats ?? null;
+      renderPlates();
+      return;
+    }
     // The room's tempo, per seat, so a joiner applies their civ to it rather
     // than to whatever their own create screen happens to say. Both columns
     // are shown before anyone readies: a balanced room may have handed this
@@ -252,8 +271,71 @@ async function ensureConnected(): Promise<boolean> {
   });
   net.on(P.AUTH_STATE, () => void refreshOnline());
   net.on(P.ROOM_LIST, (m) => renderRooms(m.rooms ?? []));
-  net.on(P.ONLINE_LIST, (m) => renderOnline(m));
+  net.on(P.ONLINE_LIST, (m: OnlineList) => renderOnline(m));
   net.on(P.PROFILE, (m: PublicProfile) => renderPlayerCard(m));
+  net.on(P.SPECTATING, () => {
+    spectating = true;
+    inRoom = true;
+    soloRoom = false;
+    // Whatever colour this socket last played is not a seat in this room.
+    net.color = null;
+    ($("player-card") as HTMLElement).hidden = true;
+    showBanner("");
+  });
+  net.on(P.SPECTATE_END, (m) => {
+    const reason = m.reason ?? "That game is over.";
+    if (!spectating) {
+      // A refusal: say so where the Watch button was.
+      const card = $("player-card") as HTMLElement;
+      $(!card.hidden ? "pc-anote" : watchFrom === "admin" ? "ad-note"
+        : "online-note").textContent = capital(reason) + ".";
+      return;
+    }
+    // Over, but the result is still on screen and still worth reading, and
+    // its replay is still a button away: stop listening rather than leave.
+    if (state?.game_over) {
+      inRoom = false;
+      showBanner(`${capital(reason)}.`);
+      return;
+    }
+    exitToLobby();
+    $("online-note").textContent = `${capital(reason)}.`;
+  });
+  net.on(P.FRIEND_LIST, (m: FriendList) => {
+    friendList = m;
+    renderFriends();
+    if (m.note) $("fr-note").textContent = m.note;
+    // A card that is open is about one of these people, and may be the one
+    // the change was made from: ask again so its buttons follow.
+    const card = $("player-card") as HTMLElement;
+    if (!card.hidden && cardId) {
+      $("pc-anote").textContent = m.note ?? "";
+      net.getProfile({ id: cardId, offset: cardOffset });
+    }
+  });
+  net.on(P.CHALLENGE_SENT, (m) => {
+    challenges.set(m.id, { kind: "out", id: m.id, name: m.to.name, tempo: m.tempo,
+                           until: performance.now() + m.seconds * 1000 });
+    renderChallenges();
+  });
+  net.on(P.CHALLENGE_RECEIVED, (m) => {
+    challenges.set(m.id, { kind: "in", id: m.id, name: m.from.name, tempo: m.tempo,
+                           until: performance.now() + m.seconds * 1000 });
+    renderChallenges();
+  });
+  net.on(P.CHALLENGE_CLOSED, (m) => {
+    if (m.id) challenges.delete(m.id);
+    if (m.reason && m.reason !== "accepted") {
+      const id = `note-${performance.now()}`;
+      challenges.set(id, { kind: "note", id, name: "", tempo: "",
+                           text: `${capital(m.reason)}.`,
+                           until: performance.now() + 6000 });
+    }
+    renderChallenges();
+  });
+  net.on(P.ADMIN_STATS, (m) => renderAdminStats(m));
+  net.on(P.ADMIN_GAMES, (m) => renderAdminGames(m));
+  net.on(P.ADMIN_USERS, (m) => renderAdminUsers(m));
   net.on(P.GAME_STATE, (m: GameState) => {
     // A frame can still be in flight when the room is left, and acting on it
     // would drag the player back onto the board from the lobby.
@@ -293,6 +375,14 @@ async function ensureConnected(): Promise<boolean> {
     if (account.identity) net.listGames(0);
     renderAccount();
     renderProfile();
+    // The admin tab is offered to an admin only. Hiding it is display: the
+    // server refuses everything behind it to anybody else regardless.
+    const admin = !!account.identity?.admin;
+    ($("tab-btn-admin") as HTMLElement).hidden = !admin;
+    if (!admin && !($("tab-admin") as HTMLElement).hidden) showTab("play");
+    friendList = null;
+    renderFriends();
+    if (account.identity) net.send({ type: P.LIST_FRIENDS });
   });
   net.on(P.AUTH_ERROR, (m) => {
     // On the account form, not the lobby status line: that line is a tab away
@@ -332,8 +422,7 @@ async function ensureConnected(): Promise<boolean> {
         watchReplay(recording, pending.seat, "postgame");
         return;
       }
-      const card = $("player-card") as HTMLElement;
-      $(card.hidden ? "pf-summary" : "pc-note").textContent =
+      $(replayNoteId(pending?.from ?? "profile")).textContent =
         err instanceof ExpandError
           ? "That recording was made by an older version and cannot be replayed."
           : "That recording could not be read.";
@@ -362,7 +451,10 @@ async function ensureConnected(): Promise<boolean> {
     net.listGames(storedOffset);
   });
   net.on(P.MOVE_REJECTED, (m) => setStatus(`rejected: ${m.reason}`, true));
-  net.on(P.OPPONENT_LEFT, (m) => startLeftCountdown(m.grace_seconds ?? 30));
+  net.on(P.OPPONENT_LEFT, (m) => startLeftCountdown(
+    m.grace_seconds ?? 30,
+    spectating ? `${COLOR_LABEL[m.color] ?? "A player"} disconnected`
+               : "Opponent disconnected"));
   net.on(P.OPPONENT_REJOINED, () => {
     stopLeftCountdown();
     showBanner("");
@@ -402,14 +494,14 @@ async function ensureConnected(): Promise<boolean> {
 }
 
 let leftTimer: number | null = null;
-function startLeftCountdown(seconds: number): void {
+function startLeftCountdown(seconds: number, who: string): void {
   let left = Math.ceil(seconds);
-  showBanner(`Opponent disconnected, ${left}s left`);
+  showBanner(`${who}, ${left}s left`);
   stopLeftCountdown();
   leftTimer = window.setInterval(() => {
     left -= 1;
     if (left <= 0) stopLeftCountdown();
-    else showBanner(`Opponent disconnected, ${left}s left`);
+    else showBanner(`${who}, ${left}s left`);
   }, 1000);
 }
 function stopLeftCountdown(): void {
@@ -928,25 +1020,267 @@ function renderRooms(rooms: OpenRoom[]): void {
   }
 }
 
-function renderOnline(msg: { count: number; signed_in: number;
-                            users: { id: string; name: string }[] }): void {
-  const people = msg.users ?? [];
-  $("online-count").textContent = people.length === 0
-    ? `${msg.count} connected, nobody signed in.`
-    : `${msg.count} connected, ${msg.signed_in} signed in.`;
+// --- people: the Online tab, friends, cards ----------------------------------
+
+const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** What somebody is doing, as a line under their name. */
+function statusLine(status: Status, opponent: string | null, solo: boolean): string {
+  switch (status) {
+    case "playing":
+      return solo ? "Playing solo" : `Playing ${opponent ? `vs ${opponent}` : "a guest"}`;
+    case "in a room": return "Getting a game ready";
+    case "watching": return "Watching a game";
+    case "offline": return "Offline";
+    default: return "In the lobby";
+  }
+}
+
+function dotClass(status: Status): string {
+  return status === "offline" ? "dot" : status === "online" ? "dot on" : "dot busy";
+}
+
+/** A name that opens the card, or plain text for somebody without one. */
+function nameNode(id: string | null, name: string, guest = false): HTMLElement {
+  if (!id) {
+    const span = document.createElement("span");
+    span.className = guest ? "who guest" : "who";
+    span.textContent = name;             // never innerHTML: another player's text
+    return span;
+  }
+  const b = document.createElement("button");
+  b.className = "link";
+  b.textContent = name;
+  b.addEventListener("click", () => openPlayerCard(id, name));
+  return b;
+}
+
+function small(label: string, onClick: () => void, cls = ""): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.textContent = label;
+  if (cls) b.className = cls;
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+/** One row: a dot, a name, a status line under it, and buttons on the right. */
+function personRow(opts: { status: Status; name: HTMLElement; line: string;
+                           you?: boolean; acts: HTMLElement[] }): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "match";
+  const what = document.createElement("span");
+  what.className = "what";
+  const dot = document.createElement("span");
+  dot.className = dotClass(opts.status);
+  what.append(dot, opts.name);
+  if (opts.you) {
+    const you = document.createElement("span");
+    you.className = "you";
+    you.textContent = "you";
+    what.append(you);
+  }
+  const line = document.createElement("span");
+  line.className = "when";
+  line.textContent = opts.line;
+  what.append(line);
+  const acts = document.createElement("span");
+  acts.className = "acts";
+  acts.append(...opts.acts);
+  row.append(what, acts);
+  return row;
+}
+
+/**
+ * Watch somebody's game. By their presence key, which the server turns into
+ * the room they are playing in: room codes never reach this list, because a
+ * code is how a private room is joined.
+ */
+function watchLive(key: string, from: string): void {
+  void (async () => {
+    if (!(await ensureConnected())) return;
+    if (inRoom) return;
+    watchFrom = from;
+    net.send({ type: P.SPECTATE, key });
+  })();
+}
+
+function renderOnline(msg: OnlineList): void {
+  const people: Person[] = msg.people ?? [];
+  const guests = people.filter((p) => p.guest).length;
+  $("online-count").textContent =
+    `${msg.count} connected: ${msg.signed_in} signed in, ${guests} ` +
+    `${guests === 1 ? "guest" : "guests"}.`;
   const list = $("online-list");
   list.textContent = "";
-  for (const person of people) {
-    const b = document.createElement("button");
-    b.textContent = person.name;           // never innerHTML: another player's text
-    b.addEventListener("click", () => openPlayerCard(person.id, person.name));
-    list.append(b);
+  for (const p of people) {
+    const mine = p.key === msg.you;
+    const acts: HTMLElement[] = [];
+    if (p.watch && !mine) acts.push(small("Watch", () => watchLive(p.watch!, "online")));
+    list.append(personRow({
+      status: p.status, name: nameNode(p.id, p.name, p.guest), you: mine,
+      line: statusLine(p.status, p.opponent, p.solo), acts,
+    }));
   }
 }
 
 async function refreshOnline(): Promise<void> {
   if (!net || net.isClosed()) return;   // no socket is not worth opening one for
   net.listOnline();
+  if (account.identity) net.send({ type: P.LIST_FRIENDS });
+}
+
+/** The account's friends as the server last listed them. Null when signed out. */
+let friendList: FriendList | null = null;
+
+function sendFriend(msg: object): void {
+  void (async () => {
+    if (await ensureConnected()) net.send(msg);
+  })();
+}
+
+/** Ask a friend for a game. The tempo is the whole of the terms. */
+function challenge(id: string, tempo: string): void {
+  void (async () => {
+    if (await ensureConnected()) net.send({ type: P.CHALLENGE, id, tempo });
+  })();
+}
+
+/** Three tempo buttons in place of the one that opened them. */
+function tempoPicker(id: string, into: HTMLElement): void {
+  into.textContent = "";
+  for (const mode of MODES) {
+    into.append(small(TEMPO_LABEL[mode] ?? mode, () => {
+      challenge(id, mode);
+      renderFriends();
+    }, "primary"));
+  }
+  into.append(small("Cancel", () => renderFriends()));
+}
+
+function friendActions(f: Friend): HTMLElement[] {
+  const acts: HTMLElement[] = [];
+  if (f.watch) acts.push(small("Watch", () => watchLive(f.watch!, "online")));
+  // Somebody who is about to play or already playing cannot take a game.
+  if (f.status === "online" || f.status === "watching") {
+    const ch = small("Challenge", () => tempoPicker(f.id, holder));
+    const holder = document.createElement("span");
+    holder.className = "acts";
+    holder.append(ch);
+    acts.push(holder);
+  }
+  const remove = small("Remove", () => {});
+  armed(remove, "Remove?", () => true,
+        () => sendFriend({ type: P.FRIEND_REMOVE, id: f.id }));
+  acts.push(remove);
+  return acts;
+}
+
+function renderFriends(): void {
+  const signedIn = !!account.identity;
+  ($("fr-signed-out") as HTMLElement).hidden = signedIn;
+  ($("fr-signed-in") as HTMLElement).hidden = !signedIn;
+  const inc = $("fr-incoming"), lst = $("fr-list"), out = $("fr-outgoing");
+  inc.textContent = lst.textContent = out.textContent = "";
+  const fl = friendList;
+  const waiting = signedIn && fl ? fl.incoming.length : 0;
+  const badge = $("online-badge");
+  badge.hidden = waiting === 0;
+  badge.textContent = String(waiting);
+  if (!signedIn || !fl) return;
+
+  for (const r of fl.incoming) {
+    inc.append(personRow({
+      status: "online", name: nameNode(r.id, r.name),
+      line: "Wants to be friends", acts: [
+        small("Accept", () => sendFriend({ type: P.FRIEND_RESPOND, id: r.id, accept: true }),
+              "primary"),
+        small("Decline", () => sendFriend({ type: P.FRIEND_RESPOND, id: r.id, accept: false })),
+      ],
+    }));
+  }
+  // Here first, then away: the friends you can do something with lead.
+  const order = (f: Friend) => (f.status === "offline" ? 1 : 0);
+  const friends = [...fl.friends].sort((a, b) => order(a) - order(b));
+  for (const f of friends) {
+    lst.append(personRow({
+      status: f.status, name: nameNode(f.id, f.name),
+      line: statusLine(f.status, f.opponent, false), acts: friendActions(f),
+    }));
+  }
+  if (!fl.friends.length && !fl.incoming.length) {
+    const none = document.createElement("p");
+    none.className = "note";
+    none.textContent = "No friends yet. Add one by name, or from their card.";
+    lst.append(none);
+  }
+  for (const r of fl.outgoing) {
+    out.append(personRow({
+      status: "offline", name: nameNode(r.id, r.name),
+      line: "Request sent, not answered yet",
+      acts: [small("Cancel request", () => sendFriend({ type: P.FRIEND_REMOVE, id: r.id }))],
+    }));
+  }
+}
+
+// --- challenges ---------------------------------------------------------------
+
+interface ChallengeView {
+  kind: "in" | "out" | "note";
+  id: string;
+  name: string;
+  tempo: string;
+  /** performance.now() at which it lapses, or the note goes. */
+  until: number;
+  text?: string;
+}
+const challenges = new Map<string, ChallengeView>();
+
+function renderChallenges(): void {
+  const box = $("challenges");
+  box.textContent = "";
+  const now = performance.now();
+  for (const [id, c] of challenges) {
+    if (c.until <= now) {
+      challenges.delete(id);
+      continue;
+    }
+    const row = document.createElement("div");
+    row.className = c.kind === "note" ? "ch note" : "ch";
+    const txt = document.createElement("span");
+    txt.className = "txt";
+    const tempoName = TEMPO_LABEL[c.tempo] ?? c.tempo;
+    txt.textContent = c.kind === "in" ? `${c.name} challenges you to a ${tempoName} game.`
+                    : c.kind === "out" ? `Waiting for ${c.name} to answer your ${tempoName} challenge.`
+                    : c.text ?? "";
+    row.append(txt);
+    if (c.kind !== "note") {
+      const left = document.createElement("span");
+      left.className = "left";
+      left.textContent = `${Math.ceil((c.until - now) / 1000)}s`;
+      row.append(left);
+    }
+    if (c.kind === "in") {
+      row.append(
+        small("Accept", () => {
+          challenges.delete(id);
+          renderChallenges();
+          net.send({ type: P.CHALLENGE_ANSWER, id, accept: true });
+        }, "primary"),
+        small("Decline", () => {
+          challenges.delete(id);
+          renderChallenges();
+          net.send({ type: P.CHALLENGE_ANSWER, id, accept: false });
+        }));
+    } else if (c.kind === "out") {
+      row.append(small("Withdraw", () => net.send({ type: P.CHALLENGE_CANCEL, id })));
+    } else {
+      row.append(small("OK", () => {
+        challenges.delete(id);
+        renderChallenges();
+      }));
+    }
+    box.append(row);
+  }
 }
 
 // --- one player's public card ------------------------------------------------
@@ -956,13 +1290,72 @@ function openPlayerCard(id: string, name: string): void {
   cardGames = [];
   cardOffset = 0;
   cardTotal = 0;
+  cardTab = visibleTab();
   $("pc-name").textContent = name;
+  $("pc-status").textContent = "";
+  $("pc-actions").textContent = "";
+  $("pc-anote").textContent = "";
   $("pc-ratings").textContent = "";
   $("pc-list").textContent = "";
   ($("pc-pager") as HTMLElement).hidden = true;
   $("pc-note").textContent = "Loading...";
   ($("player-card") as HTMLElement).hidden = false;
   if (net && !net.isClosed()) net.getProfile({ id });
+}
+
+/** Which tab the open card was opened over, so a replay from it goes back there. */
+let cardTab = "online";
+
+function visibleTab(): string {
+  const el = document.querySelector<HTMLElement>(".tab:not([hidden])");
+  return el?.id.replace(/^tab-/, "") ?? "play";
+}
+
+/**
+ * What you can do about this player: watch their game, and whatever the next
+ * step between the two of you is. A friend request answers with FRIEND_LIST,
+ * and that handler asks for the card again so these buttons follow.
+ */
+function renderCardActions(profile: PublicProfile): void {
+  const status = profile.status ?? "offline";
+  $("pc-status").textContent = statusLine(status, null, false);
+  const box = $("pc-actions");
+  box.textContent = "";
+  if (profile.watch && profile.friend !== "self") {
+    box.append(small("Watch live game", () => watchLive(profile.watch!, cardTab), "primary"));
+  }
+  const id = profile.id;
+  switch (profile.friend) {
+    case "none":
+      box.append(small("Add friend", () => sendFriend({ type: P.FRIEND_REQUEST, id })));
+      break;
+    case "outgoing":
+      box.append(small("Cancel friend request",
+                       () => sendFriend({ type: P.FRIEND_REMOVE, id })));
+      break;
+    case "incoming":
+      box.append(
+        small("Accept friend request",
+              () => sendFriend({ type: P.FRIEND_RESPOND, id, accept: true }), "primary"),
+        small("Decline", () => sendFriend({ type: P.FRIEND_RESPOND, id, accept: false })));
+      break;
+    case "friends": {
+      if (status === "online" || status === "watching") {
+        for (const mode of MODES) {
+          box.append(small(`Challenge: ${TEMPO_LABEL[mode] ?? mode}`,
+                           () => challenge(id, mode)));
+        }
+      }
+      const remove = small("Remove friend", () => {});
+      armed(remove, "Remove?", () => true,
+            () => sendFriend({ type: P.FRIEND_REMOVE, id }));
+      box.append(remove);
+      break;
+    }
+    default:
+      // Signed out (null), or your own card ("self"): nothing to offer.
+      break;
+  }
 }
 
 /** Fetch another page of the open card's games. */
@@ -986,6 +1379,7 @@ function renderPlayerCard(profile: PublicProfile): void {
   cardOffset = profile.offset ?? 0;
   cardTotal = profile.total ?? cardGames.length;
   $("pc-name").textContent = profile.name;
+  renderCardActions(profile);
   const box = $("pc-ratings");
   box.textContent = "";
   let played = 0;
@@ -1221,7 +1615,10 @@ function enterGame(): void {
   resetReplayButton();
   $("pg-rating").textContent = "";
   // Nobody to resign to when both sides are yours: exiting is the way out.
-  $("btn-resign").style.display = soloRoom ? "none" : "";
+  // A spectator has nothing to resign and no move to be precise about.
+  $("btn-resign").style.display = soloRoom || spectating ? "none" : "";
+  $("btn-precise").style.display = spectating ? "none" : "";
+  $("btn-exit").textContent = spectating ? "Stop watching" : "Exit to lobby";
   renderer = new Renderer(canvas, net.color);
   renderer.hints = hintMode();
   renderer.resize();
@@ -1236,7 +1633,8 @@ function enterGame(): void {
 // --- input ------------------------------------------------------------------
 
 function playable(): boolean {
-  return !player && !!state && !state.game_over && state.countdown === null;
+  return !player && !spectating && !!state && !state.game_over &&
+    state.countdown === null;
 }
 
 /**
@@ -1366,8 +1764,10 @@ function onPointerUp(ev: PointerEvent): void {
 function showPostgame(result: string): void {
   $("pg-result").textContent = result;
   $("btn-resign").style.display = "none";
-  // Solo rematches too: it owns both seats, so it agrees with itself.
+  // Solo rematches too: it owns both seats, so it agrees with itself. A
+  // spectator has no seat to ask with.
   ($("btn-rematch") as HTMLButtonElement).disabled = false;
+  $("btn-rematch").style.display = spectating ? "none" : "";
   $("pg-rematch").textContent = "";
   if (player) return; // a late final frame must not cover the replay
 
@@ -1395,7 +1795,8 @@ function tempoName(p: Record<string, number> | null): string {
 }
 
 function logMatch(final: GameState): void {
-  if (matchLogged || !recording.frames.length) return;
+  // Somebody else's game is not part of your history.
+  if (spectating || matchLogged || !recording.frames.length) return;
   matchLogged = true;
   const id = `m${Date.now().toString(36)}`;
   lastMatchId = id;
@@ -1516,8 +1917,7 @@ function submitAuth(kind: "in" | "up"): void {
  * said so. A signed-in client is already connected, which is why the stored
  * list never showed this.
  */
-function openStoredGame(id: string, seat: string | null,
-                        from: "postgame" | "profile" | "card"): void {
+function openStoredGame(id: string, seat: string | null, from: ReplayFrom): void {
   void (async () => {
     if (!(await ensureConnected())) {
       // Same two endings the server's own refusal has: the game just finished
@@ -1528,8 +1928,7 @@ function openStoredGame(id: string, seat: string | null,
         watchReplay(recording, seat, "postgame");
         return;
       }
-      const card = $("player-card") as HTMLElement;
-      $(card.hidden ? "pf-summary" : "pc-note").textContent =
+      $(replayNoteId(from)).textContent =
         "Could not reach the server to fetch that replay.";
       return;
     }
@@ -1742,8 +2141,7 @@ function showRatingChange(): void {
  * profile. `from` is where Close goes back to, because those are the only two
  * places a replay can be started from.
  */
-function watchReplay(rec: Recording, color: string | null,
-                     from: "postgame" | "profile" | "card"): void {
+function watchReplay(rec: Recording, color: string | null, from: ReplayFrom): void {
   if (!rec.frames.length) return;
   replayReturn = from;
   // The card is an overlay over the lobby, so it has to come off the screen.
@@ -1776,12 +2174,12 @@ function exitReplay(): void {
   // The board gets its strip back, and has to be told to redraw at that size.
   gameEl.classList.remove("replaying");
   renderer?.resize();
-  if (replayReturn === "profile" || replayReturn === "card") {
+  if (replayReturn !== "postgame") {
     gameEl.style.display = "none";
     lobby.style.display = "flex";
-    // A card is opened from the online list on the Play tab, and it is still
-    // filled in: put it back rather than making the player find them again.
-    showTab(replayReturn === "card" ? "play" : "profile");
+    // A card is opened from the Online tab, and it is still filled in: put
+    // it back rather than making the player find them again.
+    showTab(replayReturn === "card" ? cardTab : replayReturn);
     if (replayReturn === "card") ($("player-card") as HTMLElement).hidden = false;
     return;
   }
@@ -1848,11 +2246,31 @@ function updateReplayBar(): void {
  */
 function exitToLobby(): void {
   if (state) logMatch(state);
-  inRoom = false;
+  const from = spectating ? watchFrom : "play";
+  // Leaves a seat or stops watching, whichever this socket was doing.
   if (net) net.send({ type: P.LEAVE_ROOM });
   sessionStorage.removeItem("seat");
   history.replaceState(null, "", location.pathname + location.search);
+  resetGameScreen();
+  lobby.style.display = "flex";
+  setStatus("");
+  showTab(from);
+}
 
+/**
+ * Everything a game, a replay or a spectated game left on screen and in
+ * memory, cleared. Separate from leaving the room, because accepting a
+ * challenge while watching something needs the screen cleared and the new
+ * room kept.
+ */
+function resetGameScreen(): void {
+  inRoom = false;
+  spectating = false;
+  showWatchers(0);
+  $("btn-rematch").style.display = "";
+  $("btn-precise").style.display = "";
+  $("btn-exit").textContent = "Exit to lobby";
+  gameEl.classList.remove("replaying");
   state = null;
   selectedId = null;
   dragId = null;
@@ -1893,9 +2311,6 @@ function exitToLobby(): void {
   createEl.style.display = "none";
   findEl.style.display = "none";
   ($("player-card") as HTMLElement).hidden = true;
-  lobby.style.display = "flex";
-  setStatus("");
-  showTab("play");
 }
 
 /** Show one lobby tab. The others are hidden, not unbuilt. */
@@ -1909,7 +2324,15 @@ function showTab(name: string): void {
   // One scroll container behind all four tabs, so a new tab would otherwise
   // open at wherever the last one was left.
   $("lobby-body").scrollTop = 0;
-  if (name === "play") void refreshOnline();
+  if (name === "online") {
+    $("online-note").textContent = "";
+    // Looking is reason enough to connect: the socket is otherwise opened
+    // lazily, and a visitor who has pressed nothing would read "Not connected."
+    void ensureConnected().then((ok) => {
+      if (ok) void refreshOnline();
+    });
+  }
+  if (name === "admin") refreshAdmin(true);
   if (name === "profile") {
     // Opening the profile with a token but no socket yet (the connect at boot
     // can still be in flight, or have failed) must not show "signed out".
@@ -1920,7 +2343,7 @@ function showTab(name: string): void {
 
 /** True while a real game is running that leaving would abandon. */
 function gameInProgress(): boolean {
-  return !!state && !state.game_over && !soloRoom;
+  return !!state && !state.game_over && !soloRoom && !spectating;
 }
 
 /**
@@ -1954,6 +2377,169 @@ function armed(btn: HTMLButtonElement, question: string,
     }
     reset();
     action();
+  });
+}
+
+/** "3 watching" in the game bar, for the players and the spectators alike. */
+function showWatchers(n: number): void {
+  const el = $("watchers");
+  el.hidden = n === 0;
+  el.textContent = `${n} watching`;
+}
+
+/** Where a replay that could not be opened says so: next to its button. */
+function replayNoteId(from: ReplayFrom): string {
+  if (from === "admin") return "ad-games-note";
+  const card = $("player-card") as HTMLElement;
+  return card.hidden ? "pf-summary" : "pc-note";
+}
+
+// --- admin ------------------------------------------------------------------
+// Display only. Every message behind this tab is refused by the server unless
+// this socket is signed in as an admin, so nothing here is a permission.
+
+let adminGamesOffset = 0;
+let adminUsersOffset = 0;
+
+/** Stats always; the two lists only when the tab is opened, or paged. */
+function refreshAdmin(lists: boolean): void {
+  if (!net || net.isClosed() || !account.identity?.admin) return;
+  net.send({ type: P.ADMIN_STATS });
+  if (!lists) return;
+  net.send({ type: P.ADMIN_LIST_GAMES, offset: adminGamesOffset });
+  net.send({ type: P.ADMIN_LIST_USERS, offset: adminUsersOffset });
+}
+
+function tile(label: string, value: string | number, sub = ""): HTMLElement {
+  const t = document.createElement("div");
+  t.className = "tile";
+  const k = document.createElement("span");
+  k.className = "k";
+  k.textContent = label;
+  const v = document.createElement("span");
+  v.className = "v";
+  v.textContent = String(value);
+  t.append(k, v);
+  if (sub) {
+    const s = document.createElement("span");
+    s.className = "s";
+    s.textContent = sub;
+    t.append(s);
+  }
+  return t;
+}
+
+function renderAdminStats(m: any): void {
+  const live = m.live ?? {};
+  const rooms = live.rooms ?? {};
+  const up = Math.round((live.uptime ?? 0) / 60);
+  const box = $("ad-live");
+  box.textContent = "";
+  box.append(
+    tile("People", live.people ?? 0,
+         `${live.signed_in ?? 0} signed in, ${live.guests ?? 0} guests`),
+    tile("Connections", live.connections ?? 0),
+    tile("Games running", rooms.running ?? 0,
+         `${rooms.lobby ?? 0} getting ready, ${rooms.finished ?? 0} finished`),
+    tile("Spectators", rooms.spectators ?? 0),
+    tile("Open challenges", live.challenges ?? 0),
+    tile("Server up", up >= 120 ? `${Math.round(up / 60)} h` : `${up} min`),
+  );
+  const running = $("ad-running");
+  running.textContent = "";
+  for (const g of live.games ?? []) {
+    const name = (n: string | null) => n ?? "a guest";
+    const speed = g.speed === null ? "" : `, speed ${g.speed.toFixed(2)}×`;
+    const acts = g.key ? [small("Watch", () => watchLive(g.key, "admin"))] : [];
+    running.append(personRow({
+      status: "playing",
+      name: nameNode(null, g.solo ? `${name(g.white)}, solo` :
+                           `${name(g.white)} vs ${name(g.black)}`),
+      line: `${TEMPO_LABEL[g.tempo] ?? g.tempo}, ${duration(g.seconds)}` +
+            `${speed}${g.watchers ? `, ${g.watchers} watching` : ""}`,
+      acts,
+    }));
+  }
+  $("ad-note").textContent = (live.games ?? []).length
+    ? "Speed is game time per real second. A little under 1× is timer drift; " +
+      "well under, like 0.8×, means the server is overloaded and every game " +
+      "on it is running in slow motion."
+    : "No games running.";
+
+  const st = m.stored;
+  const sbox = $("ad-stored");
+  sbox.textContent = "";
+  const days = $("ad-days");
+  days.textContent = "";
+  if (!st) {
+    sbox.append(tile("Database", "off"));
+    return;
+  }
+  sbox.append(
+    tile("Players", st.users, `${st.users_7d} new this week, ${st.users_30d} this month`),
+    tile("Active", st.active_7d, "signed in this week"),
+    tile("Games", st.games, `${st.games_1d} today, ${st.games_7d} this week`),
+    tile("Rated", st.games_rated, `${st.games_solo} solo`),
+  );
+  const most = Math.max(1, ...st.per_day.map((d: any) => d.games));
+  for (const d of st.per_day) {
+    const day = document.createElement("span");
+    day.className = "day";
+    day.textContent = d.day;
+    const bar = document.createElement("span");
+    const fill = document.createElement("span");
+    fill.className = "bar";
+    fill.style.display = "block";
+    fill.style.width = `${(d.games / most) * 100}%`;
+    if (d.games === 0) fill.style.background = "transparent";
+    bar.append(fill);
+    const n = document.createElement("span");
+    n.textContent = String(d.games);
+    days.append(day, bar, n);
+  }
+}
+
+function renderAdminGames(m: any): void {
+  adminGamesOffset = m.offset ?? 0;
+  const list = $("ad-games");
+  list.textContent = "";
+  for (const g of m.games ?? []) {
+    const side = (s: any) => `${s.name ?? "a guest"} (${civName(s.civ)})`;
+    const result = g.winner === "draw" ? "draw" : `${g.winner} won`;
+    list.append(matchRow({
+      outcome: g.solo ? "Solo" : capital(result),
+      cls: "",
+      detail: g.solo ? side(g.white) : `${side(g.white)} vs ${side(g.black)}`,
+      when: `${g.tempo}${g.rated ? ", rated" : ""}, ` +
+            `${duration(Math.round(g.ticks / 20))}, ` +
+            `${new Date(g.at * 1000).toLocaleString()}`,
+      rating: null,
+      onWatch: () => openStoredGame(g.id, null, "admin"),
+      missing: "",
+    }));
+  }
+  $("ad-games-note").textContent = `${m.total ?? 0} games stored.`;
+  renderPager("ag", adminGamesOffset, m.total ?? 0, (offset) => {
+    net.send({ type: P.ADMIN_LIST_GAMES, offset });
+  });
+}
+
+function renderAdminUsers(m: any): void {
+  adminUsersOffset = m.offset ?? 0;
+  const list = $("ad-users");
+  list.textContent = "";
+  for (const u of m.users ?? []) {
+    const seen = u.last_seen ? new Date(u.last_seen * 1000).toLocaleDateString() : "never";
+    list.append(personRow({
+      status: u.online ? "online" : "offline",
+      name: nameNode(u.id, u.name),
+      line: `${u.games} game${u.games === 1 ? "" : "s"}, joined ` +
+            `${new Date(u.created * 1000).toLocaleDateString()}, last seen ${seen}`,
+      acts: [],
+    }));
+  }
+  renderPager("au", adminUsersOffset, m.total ?? 0, (offset) => {
+    net.send({ type: P.ADMIN_LIST_USERS, offset });
   });
 }
 
@@ -2001,6 +2587,19 @@ $("btn-create-go").addEventListener("click", async () => {
 $("pc-close").addEventListener("click", () => {
   ($("player-card") as HTMLElement).hidden = true;
 });
+const frName = $("fr-name") as HTMLInputElement;
+function addFriendByName(): void {
+  const name = frName.value.trim();
+  if (!name) return;
+  $("fr-note").textContent = "";
+  sendFriend({ type: P.FRIEND_REQUEST, name });
+  frName.value = "";
+}
+$("btn-fr-add").addEventListener("click", addFriendByName);
+frName.addEventListener("keydown", (ev) => {
+  if ((ev as KeyboardEvent).key === "Enter") addFriendByName();
+});
+$("btn-ad-refresh").addEventListener("click", () => refreshAdmin(true));
 $("btn-join").addEventListener("click", async () => {
   const code = ($("room-code") as HTMLInputElement).value.trim();
   if (!code) return setStatus("enter a room code", true);
@@ -2361,13 +2960,26 @@ if (bootSeat) {
 }
 
 // Presence is polled, not pushed: a broadcast to everybody on every connect
-// and sign-out is a lot of traffic for a number in a corner, and this does not
-// have to be up to the second. Only while the Play tab is actually in front.
+// and sign-out is a lot of traffic for a list nobody may be looking at, and
+// this does not have to be up to the second. Only while a tab that shows it
+// is actually in front.
 window.setInterval(() => {
   if (lobby.style.display === "none") return;
-  if (($("tab-play") as HTMLElement).hidden) return;
-  void refreshOnline();
-}, 30000);
+  if (!($("tab-online") as HTMLElement).hidden) void refreshOnline();
+  if (!($("tab-admin") as HTMLElement).hidden) refreshAdmin(false);
+}, 10000);
+// Friend requests, for the badge on the Online tab: once a minute is enough
+// for something that waits for an answer anyway.
+window.setInterval(() => {
+  if (account.identity && net && !net.isClosed() &&
+      ($("tab-online") as HTMLElement).hidden) {
+    net.send({ type: P.LIST_FRIENDS });
+  }
+}, 60000);
+// Challenge countdowns. Only does anything while one is open.
+window.setInterval(() => {
+  if (challenges.size) renderChallenges();
+}, 1000);
 
 // A room code in the fragment makes games shareable as a link.
 if (location.hash.length > 1) {

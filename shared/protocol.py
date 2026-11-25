@@ -1,7 +1,7 @@
 # Bumped whenever a message shape changes in a way old clients cannot handle.
 # The server announces it on connect so a browser holding a stale cached bundle
 # says "reload" instead of failing in ways that look like game bugs.
-VERSION = 11
+VERSION = 12
 
 # --- In-game messages (unchanged) ---
 HELLO = "HELLO"
@@ -57,6 +57,35 @@ LIST_ROOMS = "LIST_ROOMS"
 LIST_ONLINE = "LIST_ONLINE"
 GET_PROFILE = "GET_PROFILE"
 
+# --- Watching a game in progress ---
+# Asked for by the presence key of somebody who is playing, never by room
+# code: codes are how a private room is joined, and listing them would let
+# anyone walk into a lobby they were not invited to.
+SPECTATE = "SPECTATE"
+
+# --- Friends ---
+# Request and accept. Every one of these is answered with a fresh FRIEND_LIST,
+# carrying a `note` when the request was refused, so the panel that sent it is
+# also the place the answer appears.
+LIST_FRIENDS = "LIST_FRIENDS"
+FRIEND_REQUEST = "FRIEND_REQUEST"
+FRIEND_RESPOND = "FRIEND_RESPOND"
+FRIEND_REMOVE = "FRIEND_REMOVE"
+
+# --- Challenges ---
+# A challenge to a friend who is online. Held in memory only: a restart loses
+# the open ones, which is no loss for something that expires in a minute.
+CHALLENGE = "CHALLENGE"
+CHALLENGE_ANSWER = "CHALLENGE_ANSWER"
+CHALLENGE_CANCEL = "CHALLENGE_CANCEL"
+
+# --- Admin ---
+# Checked against the socket's signed-in account on every request. The client
+# shows the tab only to an admin, but that is display: the refusal is here.
+ADMIN_STATS = "ADMIN_STATS"
+ADMIN_LIST_GAMES = "ADMIN_LIST_GAMES"
+ADMIN_LIST_USERS = "ADMIN_LIST_USERS"
+
 # Server -> client
 ROOM_CREATED = "ROOM_CREATED"
 ROOM_JOINED = "ROOM_JOINED"
@@ -86,6 +115,21 @@ ONLINE_LIST = "ONLINE_LIST"
 # that the room's view settings kept from the opponent, so it stays with the
 # people who played it.
 PROFILE = "PROFILE"
+# You are now watching a game. ROOM_STATE and GAME_STATE follow as for a seat.
+SPECTATING = "SPECTATING"
+# The game you were watching is gone: the room was closed, or the players
+# started a rematch, which is a new game nobody asked you to watch.
+SPECTATE_END = "SPECTATE_END"
+FRIEND_LIST = "FRIEND_LIST"
+# The challenger's own copy, so its screen can show the countdown and Cancel.
+CHALLENGE_SENT = "CHALLENGE_SENT"
+# Unsolicited: pushed to every socket the challenged player has open.
+CHALLENGE_RECEIVED = "CHALLENGE_RECEIVED"
+# Pushed to both sides when a challenge ends, acceptance included: a second
+# tab still showing the banner has to take it down.
+CHALLENGE_CLOSED = "CHALLENGE_CLOSED"
+ADMIN_GAMES = "ADMIN_GAMES"
+ADMIN_USERS = "ADMIN_USERS"
 
 # Room codes use an alphabet without visually ambiguous characters.
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"

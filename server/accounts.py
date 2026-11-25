@@ -160,6 +160,7 @@ async def resume(token: str) -> dict | None:
     user = await db.session_user(token_hash(token))
     if user is None:
         return None
+    await db.touch_user(user["id"])
     return {"id": user["id"], "name": user["name"], "token": token,
             "ratings": await db.get_ratings(user["id"]),
             "settings": await db.get_user_settings(user["id"])}
@@ -173,6 +174,7 @@ async def sign_out(token: str) -> None:
 async def _open_session(user: dict) -> dict:
     token = secrets.token_urlsafe(32)
     await db.create_session(user["id"], token_hash(token), SESSION_DAYS)
+    await db.touch_user(user["id"])
     return {"id": user["id"], "name": user["name"], "token": token,
             "ratings": await db.get_ratings(user["id"]),
             "settings": await db.get_user_settings(user["id"])}

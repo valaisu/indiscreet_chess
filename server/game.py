@@ -1,5 +1,6 @@
 import asyncio
 import math
+import time
 
 from . import params, physics
 from .recorder import Recorder
@@ -146,6 +147,9 @@ class GameState:
 
         self.countdown = None
         self.started = True
+        # When play began, so the admin tab can compare ticks against the wall
+        # clock and see slow motion.
+        self.started_at = time.monotonic()
 
         while not self.game_over:
             t0 = loop.time()

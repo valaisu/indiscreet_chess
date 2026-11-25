@@ -51,6 +51,20 @@ PYTHONPATH=. .venv/bin/python tools/fake_client.py --pair --rooms 2 --duration 8
 PYTHONPATH=. .venv/bin/python tools/fake_client.py --hostile --url ws://localhost:8799
 ```
 
+Online tab, spectating, friends, challenges and admin, against a throwaway
+local Postgres (never the live one: the test creates accounts):
+
+```bash
+/usr/lib/postgresql/16/bin/initdb -D /tmp/chesspg -A trust -U postgres
+/usr/lib/postgresql/16/bin/pg_ctl -D /tmp/chesspg -o "-p 5499 -k '' -c listen_addresses=127.0.0.1" -l /tmp/chesspg.log start
+psql -h 127.0.0.1 -p 5499 -U postgres -c "create database chess"
+ADMIN_USERS=tadmin1 DATABASE_URL=postgresql://postgres@127.0.0.1:5499/chess .venv/bin/python -m server.main --port 8799
+PYTHONPATH=. .venv/bin/python tools/social_test.py --url ws://localhost:8799
+```
+
+Admins in production: `fly secrets set ADMIN_USERS=name1,name2` (restarts the
+machine, which ends live games).
+
 ## Deploy
 
 ```bash

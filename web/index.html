@@ -194,11 +194,7 @@
       #create-status, #find-status { min-height: 1.2rem; margin-top: 0.6rem;
                                      font-size: 0.9rem; }
 
-      /* Open games and online players: rows that are pressable as a whole. */
-      .online { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-      .online button {
-        width: auto; flex: 0 0 auto; padding: 0.3rem 0.7rem; font-size: 0.85rem;
-      }
+      /* Open games: rows that are pressable as a whole. */
       .find-row {
         display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
         border: 1px solid var(--wood-line); border-radius: 6px;
@@ -514,6 +510,70 @@
       .match button { flex: none; padding: 0.35rem 0.6rem; font-size: 0.78rem; }
       .match .gone { flex: none; color: var(--muted); font-size: 0.75rem; }
 
+      /* A person, in the online list, a friend list or the admin tab. Same
+         row as a finished game: a line of text, then what you can do. */
+      .match .who { font-weight: 600; }
+      .match .who.guest { font-weight: 400; color: var(--muted); }
+      .match button.link {
+        padding: 0; border: none; background: none; font: inherit;
+        font-weight: 600; color: var(--text); text-decoration: underline;
+        text-decoration-color: var(--wood-line); text-underline-offset: 3px;
+      }
+      .match button.link:hover { color: var(--gold); background: none; }
+      .match .acts { display: flex; gap: 0.35rem; flex-wrap: wrap; flex: none; }
+      .match .you { color: var(--gold); font-size: 0.75rem; margin-left: 0.3rem; }
+      .dot { display: inline-block; width: 0.5rem; height: 0.5rem;
+             border-radius: 50%; margin-right: 0.4rem; background: var(--wood-line); }
+      .dot.on { background: var(--good-lit); }
+      .dot.busy { background: var(--gold); }
+      .row.add { display: flex; gap: 0.5rem; }
+      .row.add input { flex: 1; min-width: 0; }
+      .row.add button { flex: none; }
+      #fr-note, #pc-anote { color: var(--gold); }
+      .badge {
+        display: inline-block; min-width: 1.1rem; margin-left: 0.3rem;
+        padding: 0 0.3rem; border-radius: 999px; background: var(--bad);
+        color: #fdf3dc; font-size: 0.7rem; line-height: 1.1rem; text-align: center;
+      }
+      /* Numbers in the admin tab: a label over a value, in a wrapping row. */
+      .tiles { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+      .tiles .tile {
+        border: 1px solid var(--wood-line); border-radius: 6px;
+        padding: 0.45rem 0.7rem; min-width: 7rem;
+      }
+      .tiles .tile .k { display: block; font-size: 0.7rem; color: var(--muted);
+                        text-transform: uppercase; letter-spacing: 0.08em; }
+      .tiles .tile .v { font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+      .tiles .tile .s { display: block; font-size: 0.72rem; color: var(--muted); }
+      .per-day { display: grid; grid-template-columns: auto 1fr auto; gap: 0.2rem 0.6rem;
+                 align-items: center; font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+      .per-day .bar { height: 0.6rem; background: var(--gold); border-radius: 2px;
+                      min-width: 1px; }
+      .per-day .day { color: var(--muted); }
+      /* A challenge: over every screen, because it can arrive on any of them
+         and it expires in a minute. */
+      #challenges {
+        position: fixed; top: 0.75rem; left: 50%; transform: translateX(-50%);
+        z-index: 50; display: flex; flex-direction: column; gap: 0.4rem;
+        width: min(26rem, calc(100% - 2rem));
+      }
+      #challenges .ch {
+        background: var(--wood); border: 1px solid var(--gold); border-radius: 8px;
+        padding: 0.6rem 0.8rem; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+        display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+        font-size: 0.88rem;
+      }
+      #challenges .ch .txt { flex: 1; min-width: 10rem; }
+      #challenges .ch .left { color: var(--muted); font-variant-numeric: tabular-nums;
+                              font-size: 0.8rem; }
+      #challenges .ch button { padding: 0.35rem 0.7rem; font-size: 0.82rem; }
+      #challenges .ch.note { border-color: var(--wood-line); }
+      #pc-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin: 0.5rem 0; }
+      #pc-actions button { padding: 0.4rem 0.7rem; font-size: 0.82rem; }
+      #pc-status { margin: 0; }
+      #watchers { align-self: center; font-size: 0.78rem; color: var(--muted);
+                  padding: 0 0.3rem; }
+
       /* A key binding. Shaped like the inputs above it because it is one:
          the button is both the control and the value it holds. */
       .keybind {
@@ -563,9 +623,13 @@
           <h1 class="brand">Continuous Chess</h1>
           <nav id="tabs">
             <button data-tab="play" class="on">Play</button>
+            <button data-tab="online">Online<span id="online-badge" class="badge" hidden></span></button>
             <button data-tab="settings">Settings</button>
             <button data-tab="rules">Rules</button>
             <button data-tab="profile">Profile</button>
+            <!-- Shown only to an admin. Showing it is all this does: every
+                 request behind it is checked by the server, every time. -->
+            <button data-tab="admin" id="tab-btn-admin" hidden>Admin</button>
           </nav>
           <!-- Whether you are signed in decides whether a game counts, so it
                belongs where it is always visible rather than one tab away.
@@ -607,11 +671,67 @@
           </div>
           <div id="status"></div>
         </section>
+      </section>
+
+      <section id="tab-online" class="tab" hidden>
+        <section class="panel">
+          <h2>Friends</h2>
+          <p class="note" id="fr-signed-out">
+            Sign in on the Profile tab to add friends and challenge them.
+          </p>
+          <div id="fr-signed-in" hidden>
+            <div class="row add">
+              <input id="fr-name" maxlength="20" spellcheck="false"
+                     placeholder="Player name" aria-label="Player name" />
+              <button id="btn-fr-add">Add friend</button>
+            </div>
+            <p class="note" id="fr-note"></p>
+            <div id="fr-incoming"></div>
+            <div id="fr-list"></div>
+            <div id="fr-outgoing"></div>
+          </div>
+        </section>
 
         <section class="panel">
-          <h2>Who is online</h2>
+          <h2>Everyone here</h2>
           <p class="note" id="online-count">Not connected.</p>
-          <div id="online-list" class="online"></div>
+          <p class="note" id="online-note"></p>
+          <div id="online-list"></div>
+        </section>
+      </section>
+
+      <section id="tab-admin" class="tab" hidden>
+        <section class="panel">
+          <h2>Right now</h2>
+          <div id="ad-live" class="tiles"></div>
+          <div id="ad-running"></div>
+          <p class="note" id="ad-note"></p>
+          <button id="btn-ad-refresh">Refresh</button>
+        </section>
+        <section class="panel">
+          <h2>All time</h2>
+          <div id="ad-stored" class="tiles"></div>
+          <p class="note">Games per day, last two weeks.</p>
+          <div id="ad-days" class="per-day"></div>
+        </section>
+        <section class="panel">
+          <h2>Games</h2>
+          <p class="note" id="ad-games-note"></p>
+          <div id="ad-games"></div>
+          <div class="pager" id="ag-pager" hidden>
+            <button id="ag-prev">Newer</button>
+            <span id="ag-range"></span>
+            <button id="ag-next">Older</button>
+          </div>
+        </section>
+        <section class="panel">
+          <h2>Players</h2>
+          <div id="ad-users"></div>
+          <div class="pager" id="au-pager" hidden>
+            <button id="au-prev">Newer</button>
+            <span id="au-range"></span>
+            <button id="au-next">Older</button>
+          </div>
         </section>
       </section>
 
@@ -891,6 +1011,9 @@
     <div id="player-card" hidden>
       <div class="pc-inner">
         <h2 id="pc-name"></h2>
+        <p class="note" id="pc-status"></p>
+        <div id="pc-actions"></div>
+        <p class="note" id="pc-anote"></p>
         <div id="pc-ratings" class="ratings"></div>
         <p class="note" id="pc-note"></p>
         <div id="pc-list"></div>
@@ -1147,6 +1270,7 @@
       <div id="plate-far" class="plate far"></div>
       <div id="plate-near" class="plate near"></div>
       <div id="game-bar">
+        <span id="watchers" hidden></span>
         <button id="btn-resign" class="danger">Resign</button>
         <button id="btn-exit">Exit to lobby</button>
       </div>
@@ -1176,6 +1300,9 @@
         <button id="rp-exit">Close</button>
       </div>
     </div>
+
+    <!-- Challenges, over whatever screen is up. -->
+    <div id="challenges"></div>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

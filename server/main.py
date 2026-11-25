@@ -16,13 +16,14 @@ import logging
 import math
 import os
 import re
+import secrets
 import time
 from pathlib import Path
 
 import websockets
 from websockets.asyncio.server import serve
 
-from . import (accounts, civs, db, params, recorder, room as room_mod,
+from . import (accounts, civs, db, params, presets, recorder, room as room_mod,
                user_settings)
 from .room import Connection, RoomManager, RUNNING
 from shared import protocol
@@ -34,7 +35,8 @@ MAX_MSG_PER_SEC = 40
 MAX_MESSAGE_BYTES = 4096
 MAX_CONNECTIONS = 200       # process-wide; Fly's proxy caps lower, this is the floor
 MAX_JOIN_FAILS = 10         # wrong room codes before the socket is closed
-MAX_ONLINE_LISTED = 60      # names in one ONLINE_LIST; the count is not capped
+MAX_ONLINE_LISTED = 100     # people in one ONLINE_LIST; the count is not capped
+CHALLENGE_SECONDS = 60      # how long a challenge waits for an answer
 GAMES_PAGE = 20             # stored games in one GAME_LIST or PROFILE
 MAX_OFFSET = 10_000         # how deep anyone may page; a bound, not a policy
 
@@ -63,41 +65,131 @@ def _refuse_constant(name: str) -> float:
     raise ValueError(f"non-finite number: {name}")
 
 
+def admin_names(raw: str | None) -> frozenset[str]:
+    """The ADMIN_USERS secret: comma-separated account names. Lowercased,
+    because names are case-insensitive everywhere else too (citext)."""
+    return frozenset(n.strip().lower() for n in (raw or "").split(",") if n.strip())
+
+
+class Challenge:
+    """One player asking a friend for a game. Lives in memory only."""
+
+    def __init__(self, src: Connection, dst_id: str, dst_name: str,
+                 tempo: str) -> None:
+        self.id = secrets.token_urlsafe(9)
+        self.src = src
+        self.src_user = dict(src.user or {})
+        self.dst_id = dst_id
+        self.dst_name = dst_name
+        self.tempo = tempo
+        self.task: asyncio.Task | None = None
+
+
+# How busy a person is, most to least: a group of sockets for one account shows
+# the busiest of them.
+_STATUS_RANK = {"playing": 3, "in a room": 2, "watching": 1, "online": 0}
+
+
 class Hub:
-    def __init__(self) -> None:
+    def __init__(self, admins: frozenset[str] = frozenset()) -> None:
         self.rooms = RoomManager()
         self.conns: set[Connection] = set()
         # Sign-in attempts per address. Per-connection counting alone is not a
         # limit: MAX_CONN_PER_IP sockets each get a fresh budget, and a new
         # handshake is cheap.
         self.attempts = accounts.Attempts()
+        # Account names allowed the admin tab. Read from the environment (a Fly
+        # secret in production), so the repository says how the check works
+        # and nothing about who passes it.
+        self.admins = admins
+        self.guests = 0                     # numbers "Guest N" labels
+        self.challenges: dict[str, Challenge] = {}
+        self.started = time.time()
 
     def conns_from(self, ip: str) -> int:
         return sum(1 for c in self.conns if c.ip == ip)
 
-    def presence(self) -> dict:
+    def is_admin(self, conn: Connection) -> bool:
+        return bool(conn.user) and conn.user["name"].lower() in self.admins
+
+    @staticmethod
+    def status_of(conn: Connection) -> str:
+        if conn.room is not None:
+            return "playing" if conn.room.state == RUNNING else "in a room"
+        if conn.watching is not None:
+            return "watching"
+        return "online"
+
+    def people(self) -> dict[str, dict]:
+        """Everyone connected, one entry per person: by account when signed
+        in, so two tabs are one person, and by socket otherwise.
+
+        `watch` is the key to spectate them by, present only while they are
+        playing a game that is running. It is a key and never a room code: a
+        code is how a private room is joined, and this list goes to everyone.
+        """
+        out: dict[str, dict] = {}
+        for c in self.conns:
+            key = c.key
+            status = self.status_of(c)
+            entry = out.get(key)
+            if entry is None:
+                entry = out[key] = {
+                    "key": key,
+                    "id": c.user["id"] if c.user else None,
+                    "name": c.user["name"] if c.user else c.label,
+                    "guest": c.user is None,
+                    "status": "online",
+                    "watch": None,
+                    "opponent": None,
+                    "solo": False,
+                }
+            if _STATUS_RANK[status] <= _STATUS_RANK[entry["status"]]:
+                continue
+            entry["status"] = status
+            if status == "playing":
+                room = c.room
+                entry["watch"] = key
+                entry["solo"] = room.solo
+                other = "black" if c.color == "white" else "white"
+                entry["opponent"] = (room.user[other] or {}).get("name")
+        return out
+
+    def presence(self, viewer: Connection | None = None) -> dict:
         """Who is connected right now.
 
-        Signed-in players are named, everyone else is only part of the count:
-        an anonymous socket has no name to show and no profile to open. The
-        named list is deduplicated by account, so a player with two tabs is one
-        person here and two in the count.
+        Everybody is listed, guests included, under the label this server
+        gave their socket. `users` is the signed-in subset in the shape older
+        clients read; `people` is the whole list.
         """
-        users: dict[str, str] = {}
-        for c in self.conns:
-            if c.user:
-                users[c.user["id"]] = c.user["name"]
-        listed = sorted(users.items(), key=lambda kv: kv[1].lower())
+        people = self.people()
+        named = sorted((p for p in people.values() if not p["guest"]),
+                       key=lambda p: p["name"].lower())
+        guests = sorted((p for p in people.values() if p["guest"]),
+                        key=lambda p: int(p["name"].split()[-1]))
         return {
             "count": len(self.conns),
-            "signed_in": len(users),
-            "users": [{"id": i, "name": n} for i, n in listed[:MAX_ONLINE_LISTED]],
+            "signed_in": len(named),
+            "users": [{"id": p["id"], "name": p["name"]}
+                      for p in named[:MAX_ONLINE_LISTED]],
+            "people": (named + guests)[:MAX_ONLINE_LISTED],
+            "you": viewer.key if viewer else None,
         }
+
+    def playing_room(self, key: str):
+        """The running game the person with this presence key is playing in."""
+        for c in self.conns:
+            if c.key == key and c.room is not None and c.room.state == RUNNING:
+                return c.room
+        return None
+
+    def conns_of(self, user_id: str) -> list[Connection]:
+        return [c for c in self.conns if c.user and c.user["id"] == user_id]
 
     # -- message handlers ---------------------------------------------------
 
     async def on_create(self, conn: Connection, msg: dict) -> None:
-        if conn.room is not None:
+        if conn.busy():
             await conn.error("already in a room")
             return
         # An open game is a public room: it goes in the LIST_ROOMS listing and
@@ -118,7 +210,7 @@ class Hub:
             await room.notify_state()
 
     async def on_join(self, conn: Connection, msg: dict) -> None:
-        if conn.room is not None:
+        if conn.busy():
             await conn.error("already in a room")
             return
         code = str(msg.get("code", "")).strip().upper()
@@ -145,7 +237,7 @@ class Hub:
         room.start_if_ready()
 
     async def on_quick_match(self, conn: Connection, msg: dict) -> None:
-        if conn.room is not None:
+        if conn.busy():
             await conn.error("already in a room")
             return
         room = await self.rooms.quick_match(conn, msg)
@@ -165,7 +257,7 @@ class Hub:
         # could sit in two rooms at once: conn.room names only the second, so
         # the first never hears about the disconnect, never starts its grace
         # forfeit, and keeps its game loop running against nobody.
-        if conn.room is not None:
+        if conn.busy():
             await conn.error("already in a room")
             return
         code  = str(msg.get("code", "")).strip().upper()
@@ -240,9 +332,16 @@ class Hub:
         return None
 
     async def _send_auth(self, conn: Connection, identity: dict | None) -> None:
+        before = (conn.user or {}).get("id")
         conn.user = None if identity is None else {"id": identity["id"],
                                                    "name": identity["name"]}
-        await conn.send({"type": protocol.AUTH_STATE, "user": identity})
+        if before and before != (conn.user or {}).get("id"):
+            # A challenge belongs to the account that sent it, and this socket
+            # no longer speaks for that account.
+            await self._drop_challenges(conn, "the challenger signed out")
+        user = None if identity is None else {**identity,
+                                              "admin": self.is_admin(conn)}
+        await conn.send({"type": protocol.AUTH_STATE, "user": user})
 
     async def on_sign_up(self, conn: Connection, msg: dict) -> None:
         blocked = await self._auth_guard(conn)
@@ -351,7 +450,7 @@ class Hub:
                          "rooms": self.rooms.open_rooms()})
 
     async def on_list_online(self, conn: Connection, msg: dict) -> None:
-        await conn.send({"type": protocol.ONLINE_LIST, **self.presence()})
+        await conn.send({"type": protocol.ONLINE_LIST, **self.presence(conn)})
 
     async def on_get_profile(self, conn: Connection, msg: dict) -> None:
         """One player's public card: name, ratings, and a page of their games.
@@ -378,7 +477,19 @@ class Hub:
             return
         page = await db.recent_games(profile["id"], limit=GAMES_PAGE,
                                      offset=_offset(msg.get("offset")))
-        await conn.send({"type": protocol.PROFILE, **profile, **page})
+        # Whether they are here and what they are doing, so the card can offer
+        # to watch their game; and where you stand with them, for its friend
+        # button. The second only means anything to somebody signed in.
+        here = self.people().get(f"u:{profile['id']}")
+        live = {
+            "status": here["status"] if here else "offline",
+            "watch": here["watch"] if here else None,
+            "friend": None,
+        }
+        if conn.user:
+            live["friend"] = ("self" if conn.user["id"] == profile["id"] else
+                              await db.friendship(conn.user["id"], profile["id"]))
+        await conn.send({"type": protocol.PROFILE, **profile, **page, **live})
 
     async def on_queue_move(self, conn: Connection, msg: dict) -> None:
         room = conn.room
@@ -454,6 +565,9 @@ class Hub:
         await room.notify_state()
 
     async def on_leave(self, conn: Connection, msg: dict) -> None:
+        if conn.watching is not None:
+            await conn.watching.remove_spectator(conn)
+            return
         if conn.room is not None:
             # leave(), not on_disconnect(): an announced exit gives the seat
             # back immediately, so the room can be joined again and quick
@@ -462,6 +576,273 @@ class Hub:
             self.rooms.sweep()
             conn.room = None
             conn.color = None
+
+    # -- watching -------------------------------------------------------------
+
+    async def on_spectate(self, conn: Connection, msg: dict) -> None:
+        """Watch the game somebody is playing, by their presence key.
+
+        A refusal is a SPECTATE_END rather than an ERROR: the button was on the
+        online list or a player's card, and that is where the answer belongs,
+        not on the Play tab's status line.
+        """
+        async def refuse(reason: str) -> None:
+            await conn.send({"type": protocol.SPECTATE_END, "reason": reason})
+
+        if conn.busy():
+            return await refuse("leave the game you are in first")
+        room = self.playing_room(str(msg.get("key", "")))
+        if room is None:
+            return await refuse("that game has ended")
+        if len(room.spectators) >= room_mod.MAX_SPECTATORS_PER_ROOM:
+            return await refuse("that game has as many spectators as it can take")
+        if self.rooms.spectators() >= room_mod.MAX_SPECTATORS:
+            return await refuse("the server is not taking more spectators right now")
+        log.info("room %s: %s is watching", room.code, conn.key)
+        await room.add_spectator(conn)
+
+    # -- friends --------------------------------------------------------------
+
+    async def _send_friends(self, conn: Connection, note: str | None = None) -> None:
+        """The whole list, whatever was asked: every friend message answers
+        with it, so the panel never has to work out what one change did."""
+        if conn.user is None or not db.enabled():
+            await conn.send({"type": protocol.FRIEND_LIST, "friends": [],
+                             "incoming": [], "outgoing": [],
+                             "note": note or "Sign in to add friends."})
+            return
+        rows = await db.friends_of(conn.user["id"])
+        people = self.people()
+        friends, incoming, outgoing = [], [], []
+        for r in rows:
+            if r["rel"] == "friends":
+                here = people.get(f"u:{r['id']}")
+                friends.append({
+                    "id": r["id"], "name": r["name"],
+                    "status": here["status"] if here else "offline",
+                    "watch": here["watch"] if here else None,
+                    "opponent": here["opponent"] if here else None,
+                })
+            else:
+                (incoming if r["rel"] == "incoming" else outgoing).append(
+                    {"id": r["id"], "name": r["name"]})
+        await conn.send({"type": protocol.FRIEND_LIST, "friends": friends,
+                         "incoming": incoming, "outgoing": outgoing,
+                         "note": note})
+
+    async def _friend_target(self, conn: Connection, msg: dict) -> dict | None:
+        """The account a friend message is about, by id or by name."""
+        uid = str(msg.get("id") or "")
+        name = str(msg.get("name") or "").strip()
+        if uid:
+            if not _UUID_RE.fullmatch(uid):
+                return None
+            return await db.public_profile(user_id=uid)
+        if name and accounts.NAME_RE.fullmatch(name):
+            return await db.public_profile(name=name)
+        return None
+
+    async def on_list_friends(self, conn: Connection, msg: dict) -> None:
+        await self._send_friends(conn)
+
+    async def on_friend_request(self, conn: Connection, msg: dict) -> None:
+        if conn.user is None or not db.enabled():
+            return await self._send_friends(conn)
+        other = await self._friend_target(conn, msg)
+        if other is None:
+            return await self._send_friends(conn, "There is no player by that name.")
+        reason = await db.friend_request(conn.user["id"], other["id"])
+        if reason:
+            return await self._send_friends(conn, reason[0].upper() + reason[1:] + ".")
+        rel = await db.friendship(conn.user["id"], other["id"])
+        await self._send_friends(
+            conn, f"You and {other['name']} are now friends." if rel == "friends"
+            else f"Friend request sent to {other['name']}.")
+
+    async def on_friend_respond(self, conn: Connection, msg: dict) -> None:
+        if conn.user is None or not db.enabled():
+            return await self._send_friends(conn)
+        other = await self._friend_target(conn, msg)
+        if other is None or not await db.friend_respond(
+                conn.user["id"], other["id"], bool(msg.get("accept"))):
+            return await self._send_friends(conn, "That request is no longer there.")
+        await self._send_friends(conn)
+
+    async def on_friend_remove(self, conn: Connection, msg: dict) -> None:
+        if conn.user is None or not db.enabled():
+            return await self._send_friends(conn)
+        other = await self._friend_target(conn, msg)
+        if other is not None:
+            await db.friend_remove(conn.user["id"], other["id"])
+        await self._send_friends(conn)
+
+    # -- challenges -----------------------------------------------------------
+
+    async def _close_challenge(self, ch: Challenge, reason: str) -> None:
+        """End a challenge and tell both sides, every tab of the challenged."""
+        if self.challenges.pop(ch.id, None) is None:
+            return
+        if ch.task is not None and ch.task is not asyncio.current_task():
+            ch.task.cancel()
+        msg = {"type": protocol.CHALLENGE_CLOSED, "id": ch.id, "reason": reason}
+        for c in {ch.src, *self.conns_of(ch.dst_id)}:
+            await c.send(msg)
+
+    async def _drop_challenges(self, conn: Connection, reason: str) -> None:
+        """Close what this socket sent, and what was waiting on an account
+        that has no socket left to answer it from."""
+        for ch in list(self.challenges.values()):
+            if ch.src is conn:
+                await self._close_challenge(ch, reason)
+            elif not any(c is not conn for c in self.conns_of(ch.dst_id)):
+                await self._close_challenge(ch, f"{ch.dst_name} went offline")
+
+    async def _expire(self, ch: Challenge) -> None:
+        try:
+            await asyncio.sleep(CHALLENGE_SECONDS)
+        except asyncio.CancelledError:
+            return
+        await self._close_challenge(ch, "nobody answered in time")
+
+    async def on_challenge(self, conn: Connection, msg: dict) -> None:
+        """Ask a friend for a game at one of the three tempos.
+
+        The game it makes is the one a quick match would: the server's own
+        preset, standard visibility, so it is rated when both are signed in -
+        which a challenge between two accounts always is.
+        """
+        async def refuse(reason: str) -> None:
+            await conn.send({"type": protocol.CHALLENGE_CLOSED, "id": None,
+                             "reason": reason})
+
+        if conn.user is None or not db.enabled():
+            return await refuse("sign in to challenge friends")
+        tempo = msg.get("tempo")
+        if tempo not in presets.MODES:
+            return await refuse("unknown tempo")
+        uid = str(msg.get("id") or "")
+        if not _UUID_RE.fullmatch(uid):
+            return await refuse("no such player")
+        if conn.room is not None:
+            return await refuse("leave the game you are in first")
+        me = conn.user["id"]
+        for ch in self.challenges.values():
+            if ch.src_user.get("id") == me:
+                return await refuse("you already have a challenge waiting")
+            if {ch.src_user.get("id"), ch.dst_id} == {me, uid}:
+                return await refuse("there is already a challenge between you")
+        if await db.friendship(me, uid) != "friends":
+            return await refuse("you can only challenge friends")
+        targets = self.conns_of(uid)
+        other = await db.public_profile(user_id=uid)
+        name = other["name"] if other else "they"
+        if not targets:
+            return await refuse(f"{name} is not online")
+        if any(c.room is not None for c in targets):
+            return await refuse(f"{name} is in a game")
+
+        ch = Challenge(conn, uid, name, tempo)
+        self.challenges[ch.id] = ch
+        ch.task = asyncio.create_task(self._expire(ch))
+        log.info("challenge %s: %s -> %s (%s)", ch.id, conn.user["name"], name, tempo)
+        await conn.send({"type": protocol.CHALLENGE_SENT, "id": ch.id,
+                         "to": {"id": uid, "name": name}, "tempo": tempo,
+                         "seconds": CHALLENGE_SECONDS})
+        for c in targets:
+            await c.send({"type": protocol.CHALLENGE_RECEIVED, "id": ch.id,
+                          "from": {"id": me, "name": conn.user["name"]},
+                          "tempo": tempo, "seconds": CHALLENGE_SECONDS})
+
+    async def on_challenge_cancel(self, conn: Connection, msg: dict) -> None:
+        ch = self.challenges.get(str(msg.get("id", "")))
+        if ch is not None and ch.src is conn:
+            await self._close_challenge(ch, f"{ch.src_user.get('name')} withdrew it")
+
+    async def on_challenge_answer(self, conn: Connection, msg: dict) -> None:
+        ch = self.challenges.get(str(msg.get("id", "")))
+        if ch is None or conn.user is None or conn.user["id"] != ch.dst_id:
+            await conn.send({"type": protocol.CHALLENGE_CLOSED,
+                             "id": msg.get("id"),
+                             "reason": "that challenge is no longer open"})
+            return
+        if not msg.get("accept"):
+            await self._close_challenge(ch, f"{ch.dst_name} declined")
+            return
+        if conn.room is not None:
+            await conn.send({"type": protocol.CHALLENGE_CLOSED, "id": None,
+                             "reason": "leave the game you are in first"})
+            return
+        src = ch.src
+        if (src not in self.conns or src.room is not None or not src.user
+                or src.user["id"] != ch.src_user.get("id")):
+            await self._close_challenge(
+                ch, f"{ch.src_user.get('name')} is no longer available")
+            return
+        # Watching something is not a reason to refuse a game, on either side:
+        # whoever is watching stops.
+        for c in (conn, src):
+            if c.watching is not None:
+                await c.watching.remove_spectator(c)
+        room = await self.rooms.create(src, {"params": dict(presets.PRESETS[ch.tempo])})
+        if room is None:
+            await self._close_challenge(ch, "the game could not be opened")
+            return
+        if await self.rooms.join(conn, room.code) is None:
+            await self._close_challenge(ch, "the game could not be opened")
+            return
+        await self._close_challenge(ch, "accepted")
+        await src.send({"type": protocol.ROOM_CREATED, "code": room.code,
+                        "color": src.color, "token": src.token, "solo": False})
+        await conn.send({"type": protocol.ROOM_JOINED, "code": room.code,
+                         "color": conn.color, "token": conn.token})
+        await room.notify_state()
+        log.info("challenge %s accepted: room %s", ch.id, room.code)
+
+    # -- admin ----------------------------------------------------------------
+
+    async def _admin_guard(self, conn: Connection) -> bool:
+        """Every admin message asks this, every time. The tab being visible
+        is the client's business; whether anything comes back is this."""
+        if self.is_admin(conn):
+            return True
+        log.warning("refused admin request from %s (%s)", conn.ip,
+                    (conn.user or {}).get("name", "signed out"))
+        await conn.error("not allowed")
+        return False
+
+    async def on_admin_stats(self, conn: Connection, msg: dict) -> None:
+        if not await self._admin_guard(conn):
+            return
+        people = self.people().values()
+        await conn.send({
+            "type": protocol.ADMIN_STATS,
+            "live": {
+                "connections": len(self.conns),
+                "people": len(people),
+                "signed_in": sum(1 for p in people if not p["guest"]),
+                "guests": sum(1 for p in people if p["guest"]),
+                "rooms": self.rooms.stats(),
+                "games": self.rooms.live_games(),
+                "challenges": len(self.challenges),
+                "uptime": round(time.time() - self.started),
+            },
+            "stored": await db.admin_stats() if db.enabled() else None,
+        })
+
+    async def on_admin_list_games(self, conn: Connection, msg: dict) -> None:
+        if not await self._admin_guard(conn):
+            return
+        page = await db.admin_games(GAMES_PAGE, _offset(msg.get("offset")))
+        await conn.send({"type": protocol.ADMIN_GAMES, **page})
+
+    async def on_admin_list_users(self, conn: Connection, msg: dict) -> None:
+        if not await self._admin_guard(conn):
+            return
+        page = await db.admin_users(GAMES_PAGE, _offset(msg.get("offset")))
+        here = self.people()
+        for u in page["users"]:
+            u["online"] = f"u:{u['id']}" in here
+        await conn.send({"type": protocol.ADMIN_USERS, **page})
 
     async def dispatch(self, conn: Connection, msg: dict) -> None:
         kind = msg.get("type")
@@ -503,6 +884,28 @@ class Hub:
             await self.on_list_online(conn, msg)
         elif kind == protocol.GET_PROFILE:
             await self.on_get_profile(conn, msg)
+        elif kind == protocol.SPECTATE:
+            await self.on_spectate(conn, msg)
+        elif kind == protocol.LIST_FRIENDS:
+            await self.on_list_friends(conn, msg)
+        elif kind == protocol.FRIEND_REQUEST:
+            await self.on_friend_request(conn, msg)
+        elif kind == protocol.FRIEND_RESPOND:
+            await self.on_friend_respond(conn, msg)
+        elif kind == protocol.FRIEND_REMOVE:
+            await self.on_friend_remove(conn, msg)
+        elif kind == protocol.CHALLENGE:
+            await self.on_challenge(conn, msg)
+        elif kind == protocol.CHALLENGE_ANSWER:
+            await self.on_challenge_answer(conn, msg)
+        elif kind == protocol.CHALLENGE_CANCEL:
+            await self.on_challenge_cancel(conn, msg)
+        elif kind == protocol.ADMIN_STATS:
+            await self.on_admin_stats(conn, msg)
+        elif kind == protocol.ADMIN_LIST_GAMES:
+            await self.on_admin_list_games(conn, msg)
+        elif kind == protocol.ADMIN_LIST_USERS:
+            await self.on_admin_list_users(conn, msg)
         elif kind == protocol.PING:
             await conn.send({"type": protocol.PONG, "t": msg.get("t"),
                              "server_time": time.time()})
@@ -522,7 +925,8 @@ class Hub:
             await ws.close(1008, "too many connections")
             return
 
-        conn = Connection(ws, ip)
+        self.guests += 1
+        conn = Connection(ws, ip, label=f"Guest {self.guests}")
         self.conns.add(conn)
         await conn.send({"type": protocol.SERVER_HELLO, "version": protocol.VERSION})
         window_start, window_count = time.monotonic(), 0
@@ -559,9 +963,12 @@ class Hub:
             log.exception("handler error for %s", ip)
         finally:
             self.conns.discard(conn)
+            if conn.watching is not None:
+                await conn.watching.remove_spectator(conn)
             if conn.room is not None:
                 await conn.room.on_disconnect(conn)
                 self.rooms.sweep()
+            await self._drop_challenges(conn, "the challenger left")
 
 
 def client_ip(ws) -> str:
@@ -623,7 +1030,10 @@ async def main() -> None:
     db.load_dotenv(Path(__file__).resolve().parent.parent / ".env")
     await db.connect(os.environ.get("DATABASE_URL"))
 
-    hub = Hub()
+    admins = admin_names(os.environ.get("ADMIN_USERS"))
+    if admins:
+        log.info("%d admin account(s) configured", len(admins))
+    hub = Hub(admins)
 
     def process_request(connection, request):
         if request.path == "/health":

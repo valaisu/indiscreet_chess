@@ -86,10 +86,15 @@ mirrored in `web/src/protocol.ts`. `VERSION` must match in both files:
 of failing in ways that look like game bugs. Bump it whenever a message shape
 changes in a way an old client cannot handle.
 
-Messages fall into four groups: the lobby (create, join, quick match, rejoin,
+Messages fall into these groups: the lobby (create, join, quick match, rejoin,
 ready, leave, rematch), the game (queue move, state, rejected, over), accounts
-(sign up, in, out, resume, settings), and the read-only lists (rooms, online,
-profile, games, one stored game).
+(sign up, in, out, resume, settings), the read-only lists (rooms, online,
+profile, games, one stored game), watching (spectate), friends, challenges,
+and admin.
+
+Almost nothing is pushed unasked. The exceptions are the game itself and
+`CHALLENGE_RECEIVED` / `CHALLENGE_CLOSED`, which go to every socket the
+challenged account has open. Presence and friend lists are polled.
 
 ## Rooms and seats
 
@@ -103,6 +108,28 @@ opponent "not here yet" forever.
 
 Solo rooms seat one connection in both colours, so anything that walks
 `Room.clients` has to cope with seeing the same connection twice.
+
+Spectators are not seats. They live in `Room.spectators` and on
+`Connection.watching`, never `Connection.room`, so every handler that acts on a
+seat refuses them without knowing they exist. They get the unfiltered snapshot,
+live (a deliberate choice: a spectator can relay hidden information to a
+player), serialised once per tick for all of them. A spectator is found by the
+presence key of somebody playing, never by room code, because a code is how a
+private room is joined. A rematch lets every spectator go: it is a new game.
+
+## People: presence, friends, challenges, admin
+
+Presence lists every connection: accounts by name (two tabs are one person),
+guests as `Guest N`, numbered per server run. Friends are one row per pair in
+`friendships` (smaller id first), request and accept; a request crossing one
+already made is an acceptance. Challenges are in memory only, between accepted
+friends, at one of the three preset tempos, so the game is rated. Accepting
+opens a private room seating both and drops them into the ordinary pre-game
+screen.
+
+Admins are named in the `ADMIN_USERS` environment variable (a Fly secret), not
+in the code or the database. `AUTH_STATE` tells the client whether to show the
+tab; every admin message checks the socket's account again on the server.
 
 ## Where authority lives
 
@@ -238,6 +265,7 @@ that need nothing but python and node:
 | `stress.py --load` | a running server, started with the two per-address limits raised |
 | `stress.py --bench` | nothing, and it runs on the deployed machine too |
 | `accounts_test.py` `db_test.py` `balance.py` | `DATABASE_URL` |
+| `social_test.py` | a running server; its friend, challenge and admin parts need the server to have a throwaway database and `ADMIN_USERS=tadmin1` |
 
 The ones that need a server or a database are deliberately not in `deploy.sh`:
 that script has to work on a machine with neither.

@@ -24,6 +24,10 @@ DISCONNECT_GRACE = 30.0     # seconds a player may be gone before forfeiting
 LOBBY_TTL        = 900.0    # unjoined rooms expire after 15 minutes
 FINISHED_TTL     = 300.0    # finished rooms stay rematchable; a replay takes minutes
 GC_INTERVAL      = 30.0
+# Each spectator is sent every frame, about 140 KB/s, so both of these are a
+# bandwidth budget rather than a courtesy.
+MAX_SPECTATORS_PER_ROOM = 10
+MAX_SPECTATORS          = 100
 
 OPPOSITE = {"white": "black", "black": "white"}
 
@@ -40,10 +44,19 @@ def dump(msg: dict) -> str:
 class Connection:
     """One websocket. Owns its identity and rate-limit budget."""
 
-    def __init__(self, ws, ip: str) -> None:
+    def __init__(self, ws, ip: str, label: str = "") -> None:
         self.ws = ws
         self.ip = ip
+        # "Guest 12": how this socket is named in the online list until it
+        # signs in. Numbered per server run, so it is a label for this visit
+        # and nothing that follows anybody between visits.
+        self.label = label
         self.room: "Room | None" = None
+        # The room this socket is watching. Separate from `room` on purpose:
+        # every handler that acts on a seat reads `room`, so a spectator is
+        # refused all of them without any of them having to know spectators
+        # exist.
+        self.watching: "Room | None" = None
         self.color: str | None = None
         self.token: str = ""
         # Token bucket for QUEUE_MOVE. Legitimate play is mana-bound to roughly
@@ -71,6 +84,15 @@ class Connection:
 
     async def error(self, reason: str) -> None:
         await self.send({"type": protocol.ERROR, "reason": reason})
+
+    @property
+    def key(self) -> str:
+        """How the online list refers to this person: one key per account, so
+        two tabs are one person, and one per socket for a guest."""
+        return f"u:{self.user['id']}" if self.user else f"g:{self.label}"
+
+    def busy(self) -> bool:
+        return self.room is not None or self.watching is not None
 
     def allow_move(self) -> bool:
         now = time.monotonic()
@@ -139,6 +161,9 @@ class Room:
         # Set once the finished game reaches the database, so the client can be
         # pointed at its stored replay.
         self.game_id: str | None = None
+        # Sockets watching. Not seats: nothing that walks `clients` sees them,
+        # so they can never forfeit, ready, resign or hold a colour.
+        self.spectators: set[Connection] = set()
 
     # -- membership ---------------------------------------------------------
 
@@ -202,13 +227,14 @@ class Room:
         self.params[color] = dict(self.base_params[color])
 
     async def broadcast(self, msg: dict) -> None:
+        """To both seats and everyone watching."""
         try:
             data = dump(msg)
         except ValueError:
             log.exception("room %s: refusing to broadcast a non-finite value", self.code)
             return
         seen: set[int] = set()
-        for conn in self.clients.values():
+        for conn in [*self.clients.values(), *self.spectators]:
             if conn is None or id(conn) in seen:
                 continue
             seen.add(id(conn))
@@ -220,13 +246,53 @@ class Room:
     async def broadcast_game(self, game) -> None:
         """Game snapshots, one per seat: each side may be entitled to see
         different things. Solo holds both seats on one socket, so it gets the
-        unfiltered view once."""
+        unfiltered view once.
+
+        Spectators see the whole game, live. That was a choice: somebody
+        watching can tell a player what the room hides from them, and the
+        owner accepted it. The frame is serialised once for all of them, so a
+        spectator costs a send and not a `to_dict`."""
         seen: set[int] = set()
         for color, conn in self.clients.items():
             if conn is None or id(conn) in seen:
                 continue
             seen.add(id(conn))
             await conn.send(game.to_dict(None if self.solo else color))
+        if not self.spectators:
+            return
+        try:
+            data = dump(game.to_dict(None))
+        except ValueError:
+            log.exception("room %s: refusing to send a non-finite frame", self.code)
+            return
+        for conn in list(self.spectators):
+            try:
+                await conn.ws.send(data)
+            except Exception:
+                pass
+
+    # -- spectators ---------------------------------------------------------
+
+    async def add_spectator(self, conn: Connection) -> None:
+        self.spectators.add(conn)
+        conn.watching = self
+        await conn.send({"type": protocol.SPECTATING, "code": self.code})
+        await self.notify_state()
+
+    async def remove_spectator(self, conn: Connection) -> None:
+        self.spectators.discard(conn)
+        if conn.watching is self:
+            conn.watching = None
+        await self.notify_state()
+
+    def end_spectating(self, reason: str) -> None:
+        """Let go of everyone watching, and tell them why. Synchronous, so it
+        can run from the places that end a game: the sends go out as tasks."""
+        for conn in list(self.spectators):
+            conn.watching = None
+            asyncio.create_task(conn.send({"type": protocol.SPECTATE_END,
+                                           "reason": reason}))
+        self.spectators.clear()
 
     def seat_card(self, color: str) -> dict:
         """One seat as both players may see it: who is sitting there, and how
@@ -260,9 +326,12 @@ class Room:
             unrated=self.unrated)
 
     async def notify_state(self) -> None:
+        await self.broadcast(self.state_msg())
+
+    def state_msg(self) -> dict:
         # Deliberately no civ names: the pick stays hidden until the game runs.
         reason = self.rated_reason()
-        await self.broadcast({
+        return {
             "type":    protocol.ROOM_STATE,
             "code":    self.code,
             "players": self.occupants(),
@@ -278,7 +347,8 @@ class Room:
             "ready":   dict(self.ready),
             "rated": reason is None,
             "unrated_reason": reason,
-        })
+            "watchers": len(self.spectators),
+        }
 
     def set_ready(self, color: str, ready: bool, civ: str | None) -> None:
         """Record one seat's choice. A solo client owns both seats and readies
@@ -295,7 +365,11 @@ class Room:
         """Put a finished room back in the lobby with the same seats and the
         same tempo. Readiness and civilizations are cleared rather than
         carried over: picking again is most of the reason to want a rematch,
-        and it puts the room back through the one path that starts a game."""
+        and it puts the room back through the one path that starts a game.
+
+        Spectators came to watch one game, and a room back in the lobby has
+        nothing to show them, so they are let go here."""
+        self.end_spectating("the players started a rematch")
         self.game = None
         self.task = None
         self.game_id = None
@@ -674,7 +748,9 @@ class RoomManager:
     def sweep(self) -> int:
         dead = [code for code, room in self.rooms.items() if room.abandoned()]
         for code in dead:
-            self.rooms.pop(code).shutdown()
+            room = self.rooms.pop(code)
+            room.end_spectating("the room has closed")
+            room.shutdown()
         if dead:
             log.info("gc removed %d room(s): %s", len(dead), ", ".join(dead))
         return len(dead)
@@ -697,4 +773,39 @@ class RoomManager:
             "running": by_state[RUNNING],
             "finished": by_state[FINISHED],
             "players": sum(r.occupants() for r in self.rooms.values()),
+            "spectators": self.spectators(),
         }
+
+    def spectators(self) -> int:
+        return sum(len(r.spectators) for r in self.rooms.values())
+
+    def live_games(self) -> list[dict]:
+        """Every game being played right now, for the admin tab."""
+        now = time.monotonic()
+        out = []
+        for room in self.rooms.values():
+            if room.state != RUNNING or room.game is None:
+                continue
+            g = room.game
+            started = getattr(g, "started_at", None)
+            running = (now - started) if started else 0.0
+            # Ticks per wall second against the rate it should run at. Below 1
+            # is the slow motion an overloaded server degrades into: it never
+            # drops frames, every game on the machine just runs slower.
+            speed = (g.tick / (running * params.TICK_RATE)) if running > 1 else None
+            seated = next((c for c in room.clients.values() if c is not None), None)
+            out.append({
+                "code": room.code,
+                "white": (room.user["white"] or {}).get("name"),
+                "black": (room.user["black"] or {}).get("name"),
+                "tempo": room.tempo,
+                "solo": room.solo,
+                "seconds": round(running),
+                "watchers": len(room.spectators),
+                "speed": None if speed is None else round(speed, 3),
+                # Somebody seated, to spectate through. Absent when both seats
+                # have dropped and the room is only counting down to a forfeit.
+                "key": seated.key if seated else None,
+            })
+        out.sort(key=lambda r: -r["seconds"])
+        return out

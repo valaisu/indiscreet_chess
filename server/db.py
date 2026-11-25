@@ -463,3 +463,247 @@ async def recent_games(user_id: str, limit: int = 20, offset: int = 0) -> dict:
             "players": {c: side(r, c) for c in ("white", "black")},
         })
     return {"games": games, "offset": offset, "total": int(total or 0)}
+
+
+async def touch_user(user_id: str) -> None:
+    """Record that this account was here. Once per sign-in or resumed session,
+    not per message: it is for the admin's "last seen", which needs a day, not
+    a second."""
+    if _pool is None:
+        return
+    try:
+        async with _pool.acquire() as conn:
+            await conn.execute("update users set last_seen_at = now() where id = $1",
+                               user_id)
+    except Exception:
+        log.exception("could not touch user %s", user_id)
+
+
+# ---------------------------------------------------------------------------
+# Friends
+# ---------------------------------------------------------------------------
+# One row per pair, smaller id first (migrations/004_friends.sql).
+
+MAX_FRIENDS = 200
+MAX_PENDING_OUT = 50
+
+
+def _pair(a: str, b: str) -> tuple[str, str]:
+    return (a, b) if a < b else (b, a)
+
+
+async def friend_request(me: str, other: str) -> str | None:
+    """Ask `other` to be friends. Returns a reason it was refused, or None.
+
+    A request to somebody who has already asked you is an acceptance: two
+    people who each pressed "add friend" want the same thing, and making the
+    second one wait for the first to come back and press Accept is a step for
+    nobody's benefit.
+    """
+    if _pool is None:
+        return "accounts are not available on this server"
+    if me == other:
+        return "you cannot add yourself"
+    lo, hi = _pair(me, other)
+    async with _pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow("""
+                select requested_by, status from friendships
+                where user_lo = $1 and user_hi = $2 for update
+            """, lo, hi)
+            if row is not None:
+                if row["status"] == "accepted":
+                    return "you are already friends"
+                if str(row["requested_by"]) == me:
+                    return "you have already asked"
+                await conn.execute("""
+                    update friendships set status = 'accepted', accepted_at = now()
+                    where user_lo = $1 and user_hi = $2
+                """, lo, hi)
+                return None
+            friends = await conn.fetchval("""
+                select count(*) from friendships
+                where (user_lo = $1 or user_hi = $1) and status = 'accepted'
+            """, me)
+            if friends >= MAX_FRIENDS:
+                return f"you already have {MAX_FRIENDS} friends"
+            pending = await conn.fetchval("""
+                select count(*) from friendships
+                where requested_by = $1 and status = 'pending'
+            """, me)
+            if pending >= MAX_PENDING_OUT:
+                return (f"you have {MAX_PENDING_OUT} requests nobody has "
+                        "answered yet; cancel some first")
+            await conn.execute("""
+                insert into friendships (user_lo, user_hi, requested_by, status)
+                values ($1, $2, $3, 'pending')
+            """, lo, hi, me)
+    return None
+
+
+async def friend_respond(me: str, other: str, accept: bool) -> bool:
+    """Answer a request `other` sent. False if there was none to answer."""
+    if _pool is None:
+        return False
+    lo, hi = _pair(me, other)
+    async with _pool.acquire() as conn:
+        if accept:
+            result = await conn.execute("""
+                update friendships set status = 'accepted', accepted_at = now()
+                where user_lo = $1 and user_hi = $2
+                  and status = 'pending' and requested_by = $3
+            """, lo, hi, other)
+        else:
+            result = await conn.execute("""
+                delete from friendships
+                where user_lo = $1 and user_hi = $2
+                  and status = 'pending' and requested_by = $3
+            """, lo, hi, other)
+    return result.endswith(" 1")
+
+
+async def friend_remove(me: str, other: str) -> None:
+    """End a friendship, or take back a request you sent. Either way the row
+    goes: the two are the same fact, that this pair is not friends."""
+    if _pool is None:
+        return
+    lo, hi = _pair(me, other)
+    async with _pool.acquire() as conn:
+        await conn.execute("""
+            delete from friendships
+            where user_lo = $1 and user_hi = $2
+              and (status = 'accepted' or requested_by = $3)
+        """, lo, hi, me)
+
+
+async def friends_of(me: str) -> list[dict]:
+    """Every row this account is part of, as the other person and the state of
+    things between you: 'friends', 'incoming' or 'outgoing'."""
+    if _pool is None:
+        return []
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch("""
+            select u.id, u.name, f.status, f.requested_by
+            from friendships f
+            join users u on u.id = case when f.user_lo = $1
+                                        then f.user_hi else f.user_lo end
+            where f.user_lo = $1 or f.user_hi = $1
+            order by lower(u.name::text)
+        """, me)
+    out = []
+    for r in rows:
+        if r["status"] == "accepted":
+            rel = "friends"
+        else:
+            rel = "outgoing" if str(r["requested_by"]) == me else "incoming"
+        out.append({"id": str(r["id"]), "name": r["name"], "rel": rel})
+    return out
+
+
+async def friendship(me: str, other: str) -> str:
+    """'friends', 'incoming', 'outgoing' or 'none', from `me`'s side."""
+    if _pool is None or me == other:
+        return "none"
+    lo, hi = _pair(me, other)
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            select status, requested_by from friendships
+            where user_lo = $1 and user_hi = $2
+        """, lo, hi)
+    if row is None:
+        return "none"
+    if row["status"] == "accepted":
+        return "friends"
+    return "outgoing" if str(row["requested_by"]) == me else "incoming"
+
+
+# ---------------------------------------------------------------------------
+# Admin
+# ---------------------------------------------------------------------------
+# Read-only. The callers check that the socket is an admin's; nothing here
+# does, so nothing here may be reachable from anywhere else.
+
+async def admin_stats() -> dict:
+    """Totals across the whole database, and games per day for two weeks."""
+    if _pool is None:
+        return {}
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            select
+              (select count(*) from users) as users,
+              (select count(*) from users
+                 where created_at > now() - interval '7 days') as users_7d,
+              (select count(*) from users
+                 where created_at > now() - interval '30 days') as users_30d,
+              (select count(*) from users
+                 where last_seen_at > now() - interval '7 days') as active_7d,
+              (select count(*) from games) as games,
+              (select count(*) from games
+                 where played_at > now() - interval '1 day') as games_1d,
+              (select count(*) from games
+                 where played_at > now() - interval '7 days') as games_7d,
+              (select count(*) from games where rated) as games_rated,
+              (select count(*) from games where solo) as games_solo
+        """)
+        days = await conn.fetch("""
+            select to_char(d, 'YYYY-MM-DD') as day, count(g.id) as n
+            from generate_series(current_date - 13, current_date, interval '1 day') d
+            left join games g on g.played_at >= d and g.played_at < d + interval '1 day'
+            group by d order by d
+        """)
+    return {**{k: int(v) for k, v in row.items()},
+            "per_day": [{"day": d["day"], "games": int(d["n"])} for d in days]}
+
+
+async def admin_games(limit: int, offset: int) -> dict:
+    """Every stored game, newest first, without recordings."""
+    if _pool is None:
+        return {"games": [], "offset": 0, "total": 0}
+    async with _pool.acquire() as conn:
+        total = await conn.fetchval("select count(*) from games")
+        rows = await conn.fetch("""
+            select g.id, g.played_at, g.tempo, g.winner, g.ticks, g.rated,
+                   g.solo, g.white_civ, g.black_civ,
+                   w.name as white_name, b.name as black_name
+            from games g
+            left join users w on w.id = g.white_user_id
+            left join users b on b.id = g.black_user_id
+            order by g.played_at desc
+            limit $1 offset $2
+        """, limit, offset)
+    games = [{
+        "id": str(r["id"]),
+        "at": r["played_at"].timestamp(),
+        "tempo": r["tempo"],
+        "winner": r["winner"],
+        "ticks": r["ticks"],
+        "rated": r["rated"],
+        "solo": r["solo"],
+        "white": {"name": r["white_name"], "civ": r["white_civ"]},
+        "black": {"name": r["black_name"], "civ": r["black_civ"]},
+    } for r in rows]
+    return {"games": games, "offset": offset, "total": int(total or 0)}
+
+
+async def admin_users(limit: int, offset: int) -> dict:
+    """Every account, newest first, with how much it has played."""
+    if _pool is None:
+        return {"users": [], "offset": 0, "total": 0}
+    async with _pool.acquire() as conn:
+        total = await conn.fetchval("select count(*) from users")
+        rows = await conn.fetch("""
+            select u.id, u.name, u.created_at, u.last_seen_at,
+                   (select count(*) from games g
+                     where g.white_user_id = u.id or g.black_user_id = u.id) as games
+            from users u
+            order by u.created_at desc
+            limit $1 offset $2
+        """, limit, offset)
+    users = [{
+        "id": str(r["id"]),
+        "name": r["name"],
+        "created": r["created_at"].timestamp(),
+        "last_seen": r["last_seen_at"].timestamp() if r["last_seen_at"] else None,
+        "games": int(r["games"]),
+    } for r in rows]
+    return {"users": users, "offset": offset, "total": int(total or 0)}
