@@ -48,7 +48,9 @@ export const DEFAULTS: Settings = {
   dragThreshold: 0.3,
   showHints: true,
   preciseKey: "Shift",
-  unselectKey: "Escape",
+  // Not Escape: it also leaves fullscreen. A modifier also survives a
+  // touchpad drag, which disable-while-typing ends at any other key.
+  unselectKey: "Control",
 };
 
 /**
@@ -69,6 +71,7 @@ export function keyMatches(pressed: string, bound: string): boolean {
 export function keyLabel(key: string): string {
   if (key === " ") return "Space";
   if (key === "Escape") return "Esc";
+  if (key === "Control") return "Ctrl";
   return key.length === 1 ? key.toUpperCase() : key;
 }
 

@@ -1265,7 +1265,20 @@ function tryMove(sel: Piece, bx: number, by: number): boolean {
   return true;
 }
 
+/** Put the piece down, mid-drag included: whatever the pointer does next moves nothing. */
+function dropPiece(): void {
+  selectedId = null;
+  dragId = null;
+  dragPos = null;
+}
+
 function onPointerDown(ev: PointerEvent): void {
+  // Any button but the primary one puts the piece down. Without this a right
+  // click on the board would queue a move on the way to the context menu.
+  if (ev.button !== 0) {
+    dropPiece();
+    return;
+  }
   if (!playable()) return;
   const [bx, by] = renderer.pxToBoard(ev.clientX, ev.clientY);
   // A press off the board puts the piece down. The canvas is wider and taller
@@ -1314,6 +1327,9 @@ function onPointerDown(ev: PointerEvent): void {
 }
 
 function onPointerMove(ev: PointerEvent): void {
+  // A right press while dragging is a chorded button: browsers report it as
+  // a move, not a pointerdown.
+  if (dragId !== null && ev.buttons & 2) dropPiece();
   if (dragId !== null) dragPos = [ev.clientX, ev.clientY];
 }
 
@@ -2225,6 +2241,10 @@ window.addEventListener("keydown", (e) => {
     $("s-keys-note").textContent = "Tab is not available: the page needs it.";
     return;
   }
+  if (e.key === " " && name === "preciseKey") {
+    $("s-keys-note").textContent = "Space is not available: it puts the piece down.";
+    return;
+  }
   if (keyMatches(e.key, settings[other])) {
     $("s-keys-note").textContent =
       `${keyLabel(e.key)} is already the ${other === "preciseKey" ? "precise" : "unselect"} key.`;
@@ -2253,9 +2273,7 @@ canvas.addEventListener("pointercancel", () => {
 });
 canvas.addEventListener("contextmenu", (e) => {
   e.preventDefault();
-  selectedId = null;
-  dragId = null;
-  dragPos = null;
+  dropPiece();
 });
 
 // Mobile browsers suspend sockets on backgrounding, so reclaim the seat on
@@ -2282,8 +2300,11 @@ window.addEventListener("keydown", (e) => {
   // Without this the shortcuts fire while a name or password is being typed:
   // "f" flips the board behind the lobby, and space would be swallowed.
   if (typingInto(e.target)) return;
-  if (keyMatches(e.key, settings.unselectKey)) {
-    selectedId = null;
+  // Space always puts the piece down during play, beside the bound key. It
+  // outranks a precise binding to Space, which older settings may still hold.
+  const spaceDrops = e.key === " " && playable();
+  if (keyMatches(e.key, settings.unselectKey) || spaceDrops) {
+    dropPiece();
     // Any key may be bound, including ones the page itself uses: space
     // scrolls, and would also press whichever button has focus.
     if (e.key === " ") e.preventDefault();
@@ -2294,15 +2315,13 @@ window.addEventListener("keydown", (e) => {
     if (state) showCivLegend(state.civs);
     renderPlates();
   }
-  if (keyMatches(e.key, settings.preciseKey) && !precise) {
+  if (keyMatches(e.key, settings.preciseKey) && !precise && !spaceDrops) {
     setPrecise(true);
     if (e.key === " ") e.preventDefault();
   }
   if (e.key === " " && player) {
     // Space is play/pause while watching. Claimed only on that screen:
     // elsewhere it still scrolls the page and still presses a focused button.
-    // Putting a piece down is the unselect key, whatever the player bound it
-    // to - Space included, if they want the old second binding back.
     e.preventDefault();
     player.toggle();
   }
